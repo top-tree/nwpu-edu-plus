@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         翱翔教务功能加强
+// @name         翱翔教务功能加强(非官方)
 // @namespace    http://tampermonkey.net/
 // @version      1.7.2
 // @description  1.提供GPA分析报告；2. 导出课程成绩与教学班排名；3.更好的“学生画像”显示；4.选课助手；5.课程关注与后台同步；6.一键自动评教；7.人员信息检索
@@ -89,8 +89,33 @@ const CONSTANTS = {
     BACKGROUND_SYNC_KEY: 'jwxt_background_sync_data',
     LAST_SYNC_TIME_KEY: 'jwxt_last_bg_sync_time',
     HISTORY_STORAGE_KEY: 'course_enrollment_history_auto_sync',
-    SYNC_COOLDOWN_MS: 1 * 60 * 60 * 1000, // 1小时冷却
-    GRADES_SNAPSHOT_KEY: 'jwxt_grades_snapshot_v1'//成绩快照存储Key
+    SYNC_COOLDOWN_MS: 1 * 60 * 60 * 1000,
+    GRADES_SNAPSHOT_KEY: 'jwxt_grades_snapshot_v1',
+
+    // 性能优化常量
+    PAGINATION_LIMIT: 50,
+    PAGE_SIZE_1000: 1000,
+    DEBOUNCE_DELAY: 50,
+    OBSERVER_TIMEOUT: 3000,
+    RETRY_INTERVAL: 100,
+    MAX_RETRY_COUNT: 20,
+    SLEEP_SHORT: 500,
+    SLEEP_LONG: 2000,
+
+    // API 端点
+    API_STUDENT_INFO: 'https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getStdInfo',
+    API_GPA: 'https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getMyGpa',
+    API_GRADES: 'https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getMyGrades',
+    API_RANK: 'https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getMyGradesByProgram',
+    API_PERSONNEL: 'https://electronic-signature.nwpu.edu.cn/api/local-user/page',
+    API_MY_SCHEDULE: 'https://jwxt.nwpu.edu.cn/student/for-std/course-schedule/getData',
+    PAGE_COURSE_TABLE: 'https://jwxt.nwpu.edu.cn/student/for-std/course-table',
+
+    // GPA 预测
+    GPA_ESTIMATE_KEY: 'jwxt_gpa_estimate_data',
+    
+    // 课表缓存
+    COURSE_TABLE_CACHE_KEY: 'jwxt_course_table_cache'
 };
 
 /**
@@ -111,6 +136,122 @@ const Logger = {
     warn: (module, msg, ...args) => Logger._print(module, msg, 'warn', args),
     error: (module, msg, ...args) => Logger._print(module, msg, 'error', args),
     info: (module, msg, ...args) => Logger._print(module, msg, 'info', args)
+};
+
+/**
+ * 通用 DOM 工具库 - 减少重复 DOM 操作
+ */
+const DOMUtils = {
+    /**
+     * 缓存 DOM 查询结果
+     */
+    cache: new Map(),
+    
+    /**
+     * 带缓存的元素查询
+     */
+    $(selector, context = document) {
+        const key = selector + (context === document ? '' : context.toString());
+        if (!DOMUtils.cache.has(key)) {
+            const el = context.querySelector(selector);
+            DOMUtils.cache.set(key, el);
+            return el;
+        }
+        const cached = DOMUtils.cache.get(key);
+        return cached && cached.isConnected ? cached : (DOMUtils.cache.delete(key), DOMUtils.$(selector, context));
+    },
+    
+    /**
+     * 带缓存的元素列表查询
+     */
+    $$(selector, context = document) {
+        const key = selector + '_all_' + (context === document ? '' : context.toString());
+        if (!DOMUtils.cache.has(key)) {
+            const els = Array.from(context.querySelectorAll(selector));
+            DOMUtils.cache.set(key, els);
+            return els;
+        }
+        const cached = DOMUtils.cache.get(key);
+        const valid = cached.filter(el => el.isConnected);
+        if (valid.length !== cached.length) {
+            DOMUtils.cache.delete(key);
+            return DOMUtils.$$(selector, context);
+        }
+        return valid;
+    },
+    
+    /**
+     * 清除缓存
+     */
+    clearCache(selector = null) {
+        if (selector) {
+            for (const key of DOMUtils.cache.keys()) {
+                if (key.startsWith(selector)) DOMUtils.cache.delete(key);
+            }
+        } else {
+            DOMUtils.cache.clear();
+        }
+    },
+    
+    /**
+     * 创建样式元素（带防重）
+     */
+    createStyle(id, css) {
+        if (document.getElementById(id)) return document.getElementById(id);
+        const style = document.createElement('style');
+        style.id = id;
+        style.textContent = css;
+        document.head.appendChild(style);
+        return style;
+    },
+    
+    /**
+     * 防抖函数
+     */
+    debounce(fn, delay = CONSTANTS.DEBOUNCE_DELAY) {
+        let timer = null;
+        return function(...args) {
+            clearTimeout(timer);
+            timer = setTimeout(() => fn.apply(this, args), delay);
+        };
+    },
+    
+    /**
+     * 创建带唯一 ID 的元素
+     */
+    createElement(tag, props = {}, children = []) {
+        const el = document.createElement(tag);
+        Object.entries(props).forEach(([key, value]) => {
+            if (key === 'className') el.className = value;
+            else if (key === 'style' && typeof value === 'object') Object.assign(el.style, value);
+            else if (key.startsWith('on')) el.addEventListener(key.slice(2).toLowerCase(), value);
+            else el.setAttribute(key, value);
+        });
+        children.forEach(child => {
+            if (typeof child === 'string') el.appendChild(document.createTextNode(child));
+            else if (child instanceof Node) el.appendChild(child);
+        });
+        return el;
+    },
+    
+    /**
+     * 等待元素出现
+     */
+    waitForElement(selector, timeout = 5000) {
+        return new Promise(resolve => {
+            const el = document.querySelector(selector);
+            if (el) return resolve(el);
+            const observer = new MutationObserver(() => {
+                const found = document.querySelector(selector);
+                if (found) {
+                    observer.disconnect();
+                    resolve(found);
+                }
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+            setTimeout(() => { observer.disconnect(); resolve(null); }, timeout);
+        });
+    }
 };
 
 // 悬浮球 UI 变量
@@ -200,7 +341,7 @@ async function getStudentId() {
     }
 
     return new Promise((resolve) => {
-        const infoUrl = "https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getStdInfo?bizTypeAssoc=2&cultivateTypeAssoc=1";
+        const infoUrl = `${CONSTANTS.API_STUDENT_INFO}?bizTypeAssoc=2&cultivateTypeAssoc=1`;
 
         GM_xmlhttpRequest({
             method: "GET",
@@ -243,10 +384,16 @@ async function fetchAllDataAndCache(retryCount = 0) {
     Logger.log("Initial", "开始获取并缓存所有教务数据");
     try {
         const studentId = await getStudentId();
+        
+        // 参数验证
+        if (!studentId) {
+            throw new Error("无法获取学生ID，请检查登录状态");
+        }
+        
         const [gpaRes, semRes, rankRes] = await Promise.all([
-            new Promise(r => GM_xmlhttpRequest({ method: "GET", url: `https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getMyGpa?studentAssoc=${studentId}`, onload: r, onerror: () => r({status:500}) })),
-            new Promise(r => GM_xmlhttpRequest({ method: "GET", url: `https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getMyGrades?studentAssoc=${studentId}&semesterAssoc=`, onload: r, onerror: () => r({status:500}) })),
-            new Promise(r => GM_xmlhttpRequest({ method: "GET", url: `https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getMyGradesByProgram?studentAssoc=${studentId}`, onload: r, onerror: () => r({status:500}) }))
+            new Promise(r => GM_xmlhttpRequest({ method: "GET", url: `${CONSTANTS.API_GPA}?studentAssoc=${studentId}`, onload: r, onerror: () => r({status:500}) })),
+            new Promise(r => GM_xmlhttpRequest({ method: "GET", url: `${CONSTANTS.API_GRADES}?studentAssoc=${studentId}&semesterAssoc=`, onload: r, onerror: () => r({status:500}) })),
+            new Promise(r => GM_xmlhttpRequest({ method: "GET", url: `${CONSTANTS.API_RANK}?studentAssoc=${studentId}`, onload: r, onerror: () => r({status:500}) }))
         ]);
 
          // --- 判断 ID 是否失效 ---
@@ -298,13 +445,28 @@ async function fetchAllDataAndCache(retryCount = 0) {
         }
 
         let allGrades = [];
+        const GRADE_API_BASE = 'https://jwxt.nwpu.edu.cn/student/for-std/grade/sheet/info';
+        
         if (semesterIds.length > 0) {
             const gradePromises = semesterIds.map(semesterId =>
                 new Promise(resolve => {
                     GM_xmlhttpRequest({
                         method: "GET",
-                        url: `https://jwxt.nwpu.edu.cn/student/for-std/grade/sheet/info/${studentId}?semester=${semesterId}`,
-                        onload: response => {if (response.status === 200) {const data = JSON.parse(response.responseText);resolve(data.semesterId2studentGrades[semesterId] || []);} else resolve([]);},
+                        url: `${GRADE_API_BASE}/${studentId}?semester=${semesterId}`,
+                        onload: response => {
+                            if (response.status === 200) {
+                                try {
+                                    const data = JSON.parse(response.responseText);
+                                    const grades = data?.semesterId2studentGrades?.[semesterId] || [];
+                                    resolve(grades);
+                                } catch (parseErr) {
+                                    Logger.error('Core', `解析学期 ${semesterId} 成绩失败`, parseErr);
+                                    resolve([]);
+                                }
+                            } else {
+                                resolve([]);
+                            }
+                        },
                         onerror: () => resolve([])
                     });
                 })
@@ -312,8 +474,14 @@ async function fetchAllDataAndCache(retryCount = 0) {
 
             const allGradesArrays = await Promise.all(gradePromises);
             allGradesArrays.forEach((grades, index) => {
+                // 边界检查
+                if (!Array.isArray(grades)) return;
+                
                 const semesterName = semesterNames[index];
                 grades.forEach(grade => {
+                    // 边界检查 - 确保必要字段存在
+                    if (!grade?.course?.id || !grade?.course?.nameZh) return;
+                    
                     allGrades.push({
                         '课程ID': grade.course.id,
                         '课程代码': grade.course.code,
@@ -710,6 +878,7 @@ function createFloatingMenu() {
     mainView.innerHTML = `
         <div class="gm-menu-group-title">成绩与学业分析</div>
         <button class="gm-menu-item" id="gm-btn-gpa" disabled><span class="gm-icon">∑</span> GPA综合分析</button>
+        <button class="gm-menu-item" id="gm-btn-gpa-estimate" disabled><span class="gm-icon">📊</span> GPA预测</button>
         <button class="gm-menu-item" id="gm-btn-export" disabled><span class="gm-icon">⇩</span> 导出成绩与排名</button>
 
         <div class="gm-menu-group-title">选课助手</div>
@@ -744,6 +913,15 @@ function createFloatingMenu() {
     menuSyncBtn.onclick = handleSyncCourseClick;
     menuFollowBtn.onclick = handleShowFollowedClick;
     menuHelpBtn.onclick = () => handleHelpClick();
+    
+    const gpaEstimateBtn = document.getElementById('gm-btn-gpa-estimate');
+    if (gpaEstimateBtn) {
+        gpaEstimateBtn.addEventListener('click', () => {
+            hideMenu();
+            // 立即显示弹窗，不要等待数据加载
+            handleGpaEstimateClickImmediate();
+        });
+    }
 
     menuHupanBtn.onclick = () => {
         hideMenu();
@@ -825,11 +1003,16 @@ function updateMenuButtonsState(isReady) {
     if (!menuExportBtn || !menuGpaBtn) return;
     menuExportBtn.disabled = !isReady;
     menuGpaBtn.disabled = !isReady;
+    
+    const menuGpaEstimateBtn = document.getElementById('gm-btn-gpa-estimate');
+    if (menuGpaEstimateBtn) {
+        menuGpaEstimateBtn.disabled = !isReady;
+    }
 
     const badge = floatBall.querySelector('.gm-badge');
     if (badge) {
         badge.style.display = (!isReady || isBackgroundSyncing) ? 'block' : 'none';
-}
+    }
 }
 
 // ----------------- 功能处理函数 -----------------
@@ -1652,48 +1835,105 @@ async function exportToExcel(filteredGrades) {
 
 // ----------------- 2.3 GPA分析 -----------------
 
+/**
+ * GPA 分析报告计算
+ * @param {Object} data - 包含 allGrades 和 gpaRankData 的数据对象
+ * @param {Array} data.allGrades - 成绩数组
+ * @param {Object} data.gpaRankData - 排名数据
+ */
 function calculateAndDisplayGPA(data) {
     Logger.log("2.3", "开始进行GPA及加权成绩分析...");
     const { allGrades, gpaRankData } = data;
     if (!allGrades || allGrades.length === 0) { alert("没有可供分析的成绩数据。"); return; }
 
+    // 中文等级制成绩映射到 GPA
     const chineseGradeMap = { '优秀': 4.0, '良好': 3.0, '中等': 2.0, '及格': 1.3, '不及格': 0.0, '通过': null, '不通过': 0.0 };
+    
+    // 卡绩分数映射 (分数 -> 提升后的 GPA)
     const stuckGradesMap = { 94: 4.1, 89: 3.9, 84: 3.7, 80: 3.3, 77: 2.7, 74: 2.3, 71: 2.0, 67: 2.0, 63: 1.7, 59: 1.3 };
+    
     const validGradesForGpa = [];
     let totalScoreCreditsNumericOnly = 0, totalCreditsNumericOnly = 0;
     let totalScoreCreditsWithMapping = 0, totalCreditsWithMapping = 0;
 
+    // 过滤有效成绩并计算加权分
     allGrades.forEach(grade => {
-        const credits = parseFloat(grade['学分']); const score = grade['成绩']; let gp = parseFloat(grade['绩点']);
+        const credits = parseFloat(grade['学分']);
+        const score = grade['成绩'];
+        let gp = parseFloat(grade['绩点']);
+        
+        // 边界检查：学分和绩点有效性验证
         if (isNaN(credits) || credits <= 0 || grade['绩点'] === null || isNaN(gp)) return;
+        
         let finalGp = gp;
-        if (typeof score === 'string' && chineseGradeMap.hasOwnProperty(score)) { const mappedGp = chineseGradeMap[score]; if (mappedGp === null) return; finalGp = mappedGp; }
+        
+        // 处理中文等级制成绩
+        if (typeof score === 'string' && chineseGradeMap.hasOwnProperty(score)) {
+            const mappedGp = chineseGradeMap[score];
+            if (mappedGp === null) return; // 跳过 P/NP 类型
+            finalGp = mappedGp;
+        }
+        
         validGradesForGpa.push({ ...grade, '学分': credits, '成绩': score, '绩点': finalGp });
+        
         const numericScore = parseFloat(score);
-        if (!isNaN(numericScore)) { totalScoreCreditsNumericOnly += numericScore * credits; totalCreditsNumericOnly += credits; }
-        if (!isNaN(numericScore)) { totalScoreCreditsWithMapping += numericScore * credits; totalCreditsWithMapping += credits; } else if (typeof score === 'string' && GRADE_MAPPING_CONFIG.hasOwnProperty(score)) { totalScoreCreditsWithMapping += GRADE_MAPPING_CONFIG[score] * credits; totalCreditsWithMapping += credits; }
+        
+        // 百分制成绩计算
+        if (!isNaN(numericScore)) {
+            totalScoreCreditsNumericOnly += numericScore * credits;
+            totalCreditsNumericOnly += credits;
+            totalScoreCreditsWithMapping += numericScore * credits;
+            totalCreditsWithMapping += credits;
+        } else if (typeof score === 'string' && GRADE_MAPPING_CONFIG.hasOwnProperty(score)) {
+            // 使用配置的中文等级制映射
+            totalScoreCreditsWithMapping += GRADE_MAPPING_CONFIG[score] * credits;
+            totalCreditsWithMapping += credits;
+        }
     });
 
     const weightedScoreNumeric = totalCreditsNumericOnly > 0 ? (totalScoreCreditsNumericOnly / totalCreditsNumericOnly) : 0;
     const weightedScoreWithMapping = totalCreditsWithMapping > 0 ? (totalScoreCreditsWithMapping / totalCreditsWithMapping) : 0;
+    
     if (validGradesForGpa.length === 0) { alert("未找到可用于计算GPA的有效课程成绩。"); return; }
 
+    // 计算总学分绩点和 GPA
     const totalCreditPoints = validGradesForGpa.reduce((sum, g) => sum + (g['绩点'] * g['学分']), 0);
     const totalCredits = validGradesForGpa.reduce((sum, g) => sum + g['学分'], 0);
     const gpa = totalCredits > 0 ? (totalCreditPoints / totalCredits) : 0;
+    
+    // 卡绩分析
     const stuckCourses = validGradesForGpa.filter(g => stuckGradesMap.hasOwnProperty(parseFloat(g['成绩'])));
 
-    let reportData = { gpa: gpa.toFixed(4), totalCredits: totalCredits.toFixed(2), totalCreditPoints: totalCreditPoints.toFixed(4), courseCount: validGradesForGpa.length, hasStuckCourses: stuckCourses.length > 0, weightedScoreNumeric: weightedScoreNumeric.toFixed(4), weightedScoreWithMapping: weightedScoreWithMapping.toFixed(4), gpaRankData: gpaRankData };
+    let reportData = { 
+        gpa: gpa.toFixed(4), 
+        totalCredits: totalCredits.toFixed(2), 
+        totalCreditPoints: totalCreditPoints.toFixed(4), 
+        courseCount: validGradesForGpa.length, 
+        hasStuckCourses: stuckCourses.length > 0, 
+        weightedScoreNumeric: weightedScoreNumeric.toFixed(4), 
+        weightedScoreWithMapping: weightedScoreWithMapping.toFixed(4), 
+        gpaRankData: gpaRankData 
+    };
+    
     if (reportData.hasStuckCourses) {
         const stuckCoursesCredits = stuckCourses.reduce((sum, c) => sum + c['学分'], 0);
-        let hypotheticalTotalCreditPoints = validGradesForGpa.reduce((sum, g) => { const scoreNum = parseFloat(g['成绩']); return sum + ((stuckGradesMap[scoreNum] || g['绩点']) * g['学分']); }, 0);
+        let hypotheticalTotalCreditPoints = validGradesForGpa.reduce((sum, g) => { 
+            const scoreNum = parseFloat(g['成绩']); 
+            return sum + ((stuckGradesMap[scoreNum] || g['绩点']) * g['学分']); 
+        }, 0);
         const hypotheticalGpa = totalCredits > 0 ? (hypotheticalTotalCreditPoints / totalCredits) : 0;
-        Object.assign(reportData, { stuckCoursesCount: stuckCourses.length, stuckCoursesCredits: stuckCoursesCredits.toFixed(2), stuckCoursesList: stuckCourses, hypotheticalGpa: hypotheticalGpa.toFixed(4), hypotheticalTotalCreditPoints: hypotheticalTotalCreditPoints.toFixed(4) });
+        Object.assign(reportData, { 
+            stuckCoursesCount: stuckCourses.length, 
+            stuckCoursesCredits: stuckCoursesCredits.toFixed(2), 
+            stuckCoursesList: stuckCourses, 
+            hypotheticalGpa: hypotheticalGpa.toFixed(4), 
+            hypotheticalTotalCreditPoints: hypotheticalTotalCreditPoints.toFixed(4) 
+        });
     }
-    showGpaReportModal(reportData);
+    showGpaReportModal(reportData, allGrades);
 }
 
-function showGpaReportModal(reportData) {
+function showGpaReportModal(reportData, allGrades) {
     const existingOverlay = document.querySelector('.gpa-report-overlay'); if (existingOverlay) existingOverlay.remove();
     const styleId = 'gpa-report-modal-styles';
     if (!document.getElementById(styleId)) {
@@ -1769,6 +2009,673 @@ function showGpaReportModal(reportData) {
         resultDisplayB.innerHTML = resultHTML;
     });
 }
+
+/**
+ * 创建加载提示弹窗
+ */
+function createLoadingOverlay(message) {
+    const overlay = document.createElement('div');
+    overlay.className = 'gpa-report-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;z-index:10001;';
+    overlay.innerHTML = `
+        <div style="background:#fff;padding:30px 50px;border-radius:8px;text-align:center;box-shadow:0 2px 12px rgba(0,0,0,0.15);">
+            <div style="font-size:16px;color:#333;">${message}</div>
+        </div>
+    `;
+    return overlay;
+}
+
+/**
+ * 跳转到课表页面获取最新课表数据
+ * 会自动跳转到"我的课表 -> 全部课程"页面，脚本在那个页面会自动解析并缓存课表数据
+ */
+function navigateToCourseTablePage() {
+    // 检查当前页面（或 iframe）是否已经在课表页面
+    const courseTableUrl = CONSTANTS.PAGE_COURSE_TABLE;
+    const isAlreadyOnCourseTable = window.location.href.includes('/student/for-std/course-table');
+    
+    // 检查 iframe 是否已经在课表页面
+    let iframeOnCourseTable = false;
+    if (!isAlreadyOnCourseTable) {
+        try {
+            const iframes = document.querySelectorAll('iframe');
+            for (const iframe of iframes) {
+                if (iframe.contentWindow && iframe.contentWindow.location.href.includes('/student/for-std/course-table')) {
+                    iframeOnCourseTable = true;
+                    // 直接在 iframe 中执行"全部课程"切换
+                    const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    const allTargets = iframeDoc.querySelectorAll('a, button, [role="tab"], li, span');
+                    for (const el of allTargets) {
+                        const text = (el.textContent || '').trim();
+                        if (text === '全部课程' || text === '课程列表') {
+                            Logger.log('课表获取', `已在课表页面，直接点击"${text}"`);
+                            el.click();
+                            // 关闭 GPA 预测弹窗
+                            const overlay = document.querySelector('.gpa-report-overlay');
+                            if (overlay) overlay.remove();
+                            return;
+                        }
+                    }
+                    break;
+                }
+            }
+        } catch (e) {
+            // 跨域 iframe 访问可能失败，忽略
+            Logger.log('课表获取', 'iframe 跨域访问失败，将使用跳转方式');
+        }
+    }
+    
+    // 如果当前窗口本身就在课表页面（iframe 内运行的情况）
+    if (isAlreadyOnCourseTable) {
+        const allTargets = document.querySelectorAll('a, button, [role="tab"], li, span');
+        for (const el of allTargets) {
+            const text = (el.textContent || '').trim();
+            if (text === '全部课程' || text === '课程列表') {
+                Logger.log('课表获取', `已在课表页面，直接点击"${text}"`);
+                el.click();
+                const overlay = document.querySelector('.gpa-report-overlay');
+                if (overlay) overlay.remove();
+                return;
+            }
+        }
+    }
+    
+    // 不在课表页面，执行跳转
+    GM_setValue('jwxt_auto_fetch_course_table', Date.now());
+    Logger.log('课表获取', '正在跳转到课表页面...');
+    
+    // 如果当前在 iframe 中，使用 top 跳转
+    if (window.top !== window.self) {
+        window.top.location.href = courseTableUrl;
+    } else {
+        window.location.href = courseTableUrl;
+    }
+}
+
+/**
+ * 立即显示 GPA 预测弹窗（带加载状态）
+ */
+function handleGpaEstimateClickImmediate() {
+    // 移除旧弹窗
+    const existingOverlay = document.querySelector('.gpa-report-overlay');
+    if (existingOverlay) existingOverlay.remove();
+    
+    // 创建弹窗框架（立即显示）
+    const overlay = document.createElement('div');
+    overlay.className = 'gpa-report-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;z-index:10001;';
+    
+    const modal = document.createElement('div');
+    modal.className = 'gpa-report-modal';
+    modal.style.cssText = 'background:#fff;border-radius:8px;max-width:700px;width:90%;max-height:85vh;overflow-y:auto;box-shadow:0 4px 20px rgba(0,0,0,0.15);';
+    modal.innerHTML = `
+        <div style="padding:20px;border-bottom:1px solid #ebeef5;display:flex;justify-content:space-between;align-items:center;">
+            <h3 style="margin:0;font-size:18px;color:#303133;">📊 GPA 预测</h3>
+            <button id="gm-estimate-close" style="background:none;border:none;font-size:24px;cursor:pointer;color:#909399;">&times;</button>
+        </div>
+        <div id="gm-estimate-content" style="padding:20px;text-align:center;">
+            <div style="color:#909399;padding:40px;">正在加载数据...</div>
+        </div>
+    `;
+    
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    
+    // 关闭按钮
+    modal.querySelector('#gm-estimate-close').onclick = () => overlay.remove();
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    
+    // 异步加载数据
+    setTimeout(() => {
+        handleGpaEstimateClickLoad(modal.querySelector('#gm-estimate-content'), overlay);
+    }, 10);
+}
+
+/**
+ * 加载 GPA 预测数据并填充到弹窗
+ */
+async function handleGpaEstimateClickLoad(contentDiv, overlay) {
+    const cachedData = getCachedData();
+    if (!cachedData || !cachedData.allGrades || cachedData.allGrades.length === 0) {
+        contentDiv.innerHTML = '<div style="color:#f56c6c;padding:40px;">暂无成绩数据，请先获取成绩数据后再使用此功能。</div>';
+        return;
+    }
+    
+    const allGrades = cachedData.allGrades;
+    const semesterNames = cachedData.semesterNames || [];
+    const gpaRankData = cachedData.gpaRankData;
+    
+    // 使用官方 GPA 数据
+    const currentGPA = gpaRankData?.gpa || 'N/A';
+    
+    // P/NP 课程的成绩标识
+    const pnPGrades = ['通过', 'P', '不通过', 'NP'];
+    
+    const estimateData = JSON.parse(GM_getValue(CONSTANTS.GPA_ESTIMATE_KEY, '{}'));
+    
+    // 已出成绩的课程及其成绩映射（用于判断是否已出分）
+    const gradedCourseMap = new Map();
+    // 所有课程的学分映射（用于在课表缓存无学分时做后备查询）
+    const creditLookupMap = new Map();
+    allGrades.forEach(g => {
+        if (g['课程代码'] && g['成绩']) {
+            gradedCourseMap.set(g['课程代码'], {
+                '成绩': g['成绩'],
+                '绩点': g['绩点'],
+                '学分': g['学分'],
+                '课程名称': g['课程名称'],
+                '学期': g['学期']
+            });
+        }
+        // 记录所有课程的学分（无论是否有成绩）
+        if (g['课程代码'] && g['学分']) {
+            creditLookupMap.set(g['课程代码'], g['学分']);
+        }
+    });
+    
+    // 收集当前学期的所有课程（无论是否出分）
+    const currentSemesterCourses = [];
+    const seenCourseCodes = new Set();
+    
+    // 获取课表缓存
+    const courseTableCache = GM_getValue(CONSTANTS.COURSE_TABLE_CACHE_KEY, null);
+    let currentSemester = null;
+    let parsedCourseCache = null;
+    let cacheTimestamp = 0;
+    
+    // 解析课表缓存（只解析一次）
+    if (courseTableCache) {
+        try {
+            parsedCourseCache = JSON.parse(courseTableCache);
+            currentSemester = parsedCourseCache.semester;
+            cacheTimestamp = parsedCourseCache.timestamp || 0;
+            Logger.log('GPA 预测', `课表缓存学期: ${currentSemester}`);
+        } catch (e) {
+            Logger.error('GPA 预测', '解析课表缓存失败', e);
+            parsedCourseCache = null;
+        }
+    }
+    
+    Logger.log('GPA 预测', `目标学期: ${currentSemester || '未知'}`);
+    
+    // P/NP 课程关键词（用于过滤）
+    const pnpKeywords = ['通过', '不通过', 'Pass', 'NP', 'P/NP'];
+    
+    // === 核心：从课表缓存获取课程列表（这才是用户当前选的课）===
+    if (parsedCourseCache) {
+        try {
+            const cacheData = parsedCourseCache;
+            if (cacheData.courses && Array.isArray(cacheData.courses)) {
+                Logger.log('GPA 预测', `课表缓存中有 ${cacheData.courses.length} 门课程`);
+                
+                cacheData.courses.forEach(course => {
+                    const code = course.code;
+                    const name = course.name;
+                    const credits = course.credits || '';
+                    
+                    if (!code || !name) return;
+                    if (seenCourseCodes.has(code)) return;
+                    
+                    // 过滤 P/NP 课程
+                    const isPnp = pnpKeywords.some(kw => name.includes(kw));
+                    if (isPnp) {
+                        Logger.log('GPA 预测', `跳过 P/NP: ${name}`);
+                        return;
+                    }
+                    
+                    seenCourseCodes.add(code);
+                    
+                    // 检查成绩数据中是否有这门课的成绩
+                    const gradedInfo = gradedCourseMap.get(code);
+                    const hasScore = gradedInfo && gradedInfo['成绩'] && gradedInfo['成绩'] !== '待发布' && gradedInfo['成绩'] !== '';
+                    
+                    // 学分优先级：已出分成绩的学分 > 课表缓存学分 > 成绩数据中的学分
+                    let finalCredits = '';
+                    if (hasScore && gradedInfo['学分']) {
+                        finalCredits = gradedInfo['学分'];
+                    } else if (credits) {
+                        finalCredits = credits;
+                    } else if (creditLookupMap.has(code)) {
+                        finalCredits = creditLookupMap.get(code);
+                    }
+                    
+                    currentSemesterCourses.push({
+                        '课程代码': code,
+                        '课程名称': name,
+                        '学分': finalCredits,
+                        '学期': currentSemester,
+                        '已出分': hasScore,
+                        '成绩': hasScore ? gradedInfo['成绩'] : null,
+                        '绩点': hasScore ? gradedInfo['绩点'] : null,
+                        '来源': '课表'
+                    });
+                });
+            }
+        } catch (e) {
+            Logger.error('GPA 预测', '读取课表缓存失败', e);
+        }
+    }
+    
+    // 如果没有课表缓存数据，不再从成绩数据获取（避免错误加载上学期课程）
+    if (currentSemesterCourses.length === 0 && !parsedCourseCache) {
+        Logger.log('GPA 预测', '无课表缓存，提示用户打开课表页面');
+    }
+    
+    Logger.log('GPA 预测', `当前学期共 ${currentSemesterCourses.length} 门课程`);
+    
+    // 检测学分缺失情况：如果用户只打开了"我的课表"但未进入"全部课程"，学分可能无法获取
+    const coursesWithoutCredits = currentSemesterCourses.filter(c => {
+        const credit = parseFloat(c['学分']);
+        return isNaN(credit) || credit <= 0;
+    });
+    const hasMissingCredits = coursesWithoutCredits.length > 0;
+    
+    if (hasMissingCredits) {
+        Logger.warn('GPA 预测', `有 ${coursesWithoutCredits.length} 门课程缺少学分信息: ${coursesWithoutCredits.map(c => c['课程名称']).join(', ')}`);
+    }
+    
+    // 计算缓存时间信息
+    const cacheAgeMs = cacheTimestamp ? (Date.now() - cacheTimestamp) : 0;
+    const cacheAgeHours = cacheAgeMs / 1000 / 60 / 60;
+    const cacheAgeText = cacheTimestamp ? formatCacheAge(cacheAgeMs) : '';
+    const isCacheStale = cacheAgeHours > 24; // 超过24小时视为可能过期
+    
+    // 构建表格 HTML
+    let tableHTML = '';
+    if (currentSemesterCourses.length === 0) {
+        tableHTML = `<div style="text-align:center;padding:40px;color:#888;font-size:15px;">
+            <p>暂无当前学期课程数据</p>
+            <p style="margin-top:15px;font-size:13px;line-height:1.8;">
+                点击下方按钮将跳转到课表页面，自动获取全部课程信息：
+            </p>
+            <button id="gm-fetch-course-btn" style="margin-top:12px;padding:10px 28px;background:#409EFF;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px;">前往课表页面获取数据</button>
+            <p style="margin-top:12px;font-size:12px;color:#bbb;">将自动跳转到「我的课表 → 全部课程」页面完成数据缓存，<br>之后回到此页面即可使用 GPA 预测功能。</p>
+        </div>`;
+    } else if (hasMissingCredits) {
+        // 有课程但学分信息不完整（通常是只查看了"我的课表"而没有进入"全部课程"）
+        tableHTML = `<div style="text-align:center;padding:40px;color:#888;font-size:15px;">
+            <div style="margin-bottom:18px;padding:14px;background:#FDF6EC;border:1px solid #E6A23C;border-radius:6px;text-align:left;font-size:13px;color:#E6A23C;line-height:1.8;">
+                <b style="font-size:14px;">学分信息不完整</b><br>
+                已获取到课程信息，但部分课程缺少学分数据，无法进行 GPA 预测。
+            </div>
+            <p style="font-size:13px;line-height:1.8;color:#666;">
+                这通常是因为仅查看了「我的课表」页面，该页面不包含学分信息。<br>
+                请点击下方按钮跳转到课表页面，并切换到「全部课程」视图以获取完整数据：
+            </p>
+            <button id="gm-fetch-course-btn" style="margin-top:12px;padding:10px 28px;background:#E6A23C;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px;">前往课表页面补全学分数据</button>
+            <p style="margin-top:12px;font-size:12px;color:#bbb;">将自动跳转到「我的课表 → 全部课程」页面完成数据缓存，<br>之后回到此页面即可使用 GPA 预测功能。</p>
+        </div>`;
+    } else {
+        // 统计已出分和未出分数量
+        const gradedCount = currentSemesterCourses.filter(c => c['已出分']).length;
+        const pendingCount = currentSemesterCourses.filter(c => !c['已出分']).length;
+        
+        // 缓存过期警告
+        const cacheWarningHTML = isCacheStale 
+            ? `<div style="margin-bottom:12px;padding:10px;background:#FDF6EC;border:1px solid #E6A23C;border-radius:4px;font-size:13px;color:#E6A23C;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+                <span>⚠️ 课表缓存已超过 ${cacheAgeText}，选课如有变动请刷新。</span>
+                <button id="gm-refresh-course-btn" title="如果选退课有变动，请点此刷新以获取最新课表" style="padding:5px 14px;background:#E6A23C;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;white-space:nowrap;">🔄 刷新课表</button>
+            </div>` 
+            : (cacheAgeText ? `<div style="margin-bottom:8px;font-size:12px;color:#bbb;display:flex;align-items:center;gap:6px;">
+                <span>课表数据更新于 ${cacheAgeText}前</span>
+                <button id="gm-refresh-course-btn" title="如果选退课有变动，请点此刷新以获取最新课表" style="padding:2px 10px;background:none;color:#409EFF;border:1px solid #409EFF;border-radius:3px;cursor:pointer;font-size:11px;">刷新</button>
+            </div>` : '');
+        
+        tableHTML = `
+            ${cacheWarningHTML}
+            <div style="margin-bottom:15px;padding:10px;background:#f5f7fa;border-radius:4px;font-size:13px;">
+                <span>当前官方 GPA: <b style="color:#409EFF;font-size:16px;">${currentGPA}</b></span>
+                <span style="margin-left:20px;">已出分: <b style="color:#67C23A;">${gradedCount}</b> 门</span>
+                <span style="margin-left:10px;">未出分: <b style="color:#E6A23C;">${pendingCount}</b> 门</span>
+                <span style="margin-left:20px;color:#909399;">学期: ${currentSemester || '未知'}</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse;margin:15px 0;">
+                <thead>
+                    <tr style="background:#f5f7fa;">
+                        <th style="padding:10px;border:1px solid #ebeef5;text-align:left;">课程名称</th>
+                        <th style="padding:10px;border:1px solid #ebeef5;text-align:center;width:60px;">学分</th>
+                        <th style="padding:10px;border:1px solid #ebeef5;text-align:center;width:100px;">GPA</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        
+        // GPA选项（最后一个为自定义）
+        const gpaOptions = [4.1, 3.9, 3.7, 3.3, 3.0, 2.7, 2.3, 2.0, 1.7, 1.3, 0];
+        
+        currentSemesterCourses.forEach((course, idx) => {
+            const sourceTag = course['来源'] === '课表' ? '<span style="font-size:11px;color:#909399;">[课表]</span>' : '';
+            
+            // 学分显示（学分一定从课表/成绩数据中获得，无需手动输入）
+            const creditDisplay = `<span>${course['学分'] || '-'}</span><input type="hidden" data-code="${course['课程代码']}" data-field="credits" value="${course['学分'] || 0}">`;
+            
+            // 成绩/GPA显示：已出分固定显示，未出分可输入
+            let gpaCell = '';
+            if (course['已出分']) {
+                // 已出分：GPA 为主显示，成绩为辅
+                const scoreColor = course['绩点'] >= 3.7 ? '#67C23A' : (course['绩点'] >= 2.0 ? '#E6A23C' : '#F56C6C');
+                gpaCell = `<span style="color:${scoreColor};font-weight:bold;font-size:15px;">${course['绩点']}</span>
+                           <br><small style="color:#909399;">${course['成绩']}</small>
+                           <input type="hidden" data-code="${course['课程代码']}" data-field="gpa" value="${course['绩点']}" data-graded="true">`;
+            } else {
+                // 未出分：显示下拉选择框
+                const savedGpa = estimateData[course['课程代码']] || '';
+                const isCustomGpa = savedGpa && !gpaOptions.includes(parseFloat(savedGpa));
+                
+                const gpaSelectId = `gpa-select-${idx}`;
+                const gpaCustomId = `gpa-custom-${idx}`;
+                gpaCell = `<select id="${gpaSelectId}" data-code="${course['课程代码']}" data-field="gpa" class="gpa-predict-select" style="width:80px;padding:5px 6px;border:1px solid #c0c4cc;border-radius:4px;text-align:center;font-size:13px;color:#606266;background:#fff;cursor:pointer;outline:none;appearance:auto;">
+                    <option value="" style="color:#c0c4cc;">--</option>
+                    ${gpaOptions.map(g => `<option value="${g}" ${savedGpa !== '' && String(savedGpa) === String(g) && !isCustomGpa ? 'selected' : ''}>${g}</option>`).join('')}
+                    <option value="custom" ${isCustomGpa ? 'selected' : ''}>自定义</option>
+                </select>
+                <input type="number" step="0.01" min="0" max="4.3" id="${gpaCustomId}" data-code="${course['课程代码']}" data-field="gpa-custom" value="${isCustomGpa ? savedGpa : ''}" placeholder="0-4.3" style="width:62px;padding:4px 6px;border:1px solid #c0c4cc;border-radius:4px;text-align:center;font-size:13px;color:#606266;margin-left:4px;outline:none;${isCustomGpa ? '' : 'display:none;'}">`;
+            }
+            
+            // 已出分：绿色左边框 + 微灰背景；未出分：浅灰左边框 + 极浅灰背景
+            const rowStyle = course['已出分'] 
+                ? 'background:#fafafa;border-left:3px solid #67C23A;' 
+                : 'background:#fdfdfd;border-left:3px solid #dcdfe6;';
+            const rowTag = course['已出分'] 
+                ? '<span style="display:inline-block;width:7px;height:7px;background:#67C23A;border-radius:50%;vertical-align:middle;margin-right:4px;"></span>' 
+                : '<span style="display:inline-block;width:7px;height:7px;border:2px solid #E6A23C;border-radius:50%;vertical-align:middle;margin-right:4px;box-sizing:border-box;"></span>';
+            
+            tableHTML += `
+                <tr data-code="${course['课程代码']}" style="${rowStyle}">
+                    <td style="padding:10px;border:1px solid #ebeef5;">
+                        ${rowTag} ${course['课程名称']} ${sourceTag}
+                        <br><small style="color:#909399;">${course['课程代码']}</small>
+                    </td>
+                    <td style="padding:10px;border:1px solid #ebeef5;text-align:center;">
+                        ${creditDisplay}
+                    </td>
+                    <td style="padding:10px;border:1px solid #ebeef5;text-align:center;">
+                        ${gpaCell}
+                    </td>
+                </tr>
+            `;
+        });
+        
+        tableHTML += `
+                </tbody>
+            </table>
+            <div style="text-align:center;margin-top:15px;">
+                <button id="gm-estimate-calc" style="padding:10px 30px;background:#409EFF;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px;">预测GPA</button>
+            </div>
+            <div id="gm-estimate-result" style="margin-top:15px;padding:15px;background:#f5f7fa;border-radius:4px;display:none;">
+                <div id="gm-result-a" style="font-size:14px;margin-bottom:8px;"></div>
+                <div id="gm-result-b" style="font-size:14px;"></div>
+            </div>
+        `;
+    }
+    
+    contentDiv.innerHTML = tableHTML;
+    
+    // 自动保存函数
+    const autoSaveGPA = (courseCode, rowElement) => {
+        const estimateData = JSON.parse(GM_getValue(CONSTANTS.GPA_ESTIMATE_KEY, '{}'));
+        
+        // 获取 GPA 值
+        const gpaSelect = rowElement.querySelector(`select[data-code="${courseCode}"]`);
+        const gpaCustomInput = rowElement.querySelector(`input[data-field="gpa-custom"][data-code="${courseCode}"]`);
+        
+        let gpaValue = '';
+        if (gpaSelect && gpaSelect.value) {
+            if (gpaSelect.value === 'custom') {
+                gpaValue = gpaCustomInput?.value || '';
+            } else {
+                gpaValue = gpaSelect.value;
+            }
+        }
+        
+        if (gpaValue !== '') {
+            estimateData[courseCode] = gpaValue;
+            GM_setValue(CONSTANTS.GPA_ESTIMATE_KEY, JSON.stringify(estimateData));
+            Logger.log('GPA 预测', `自动保存: ${courseCode} = ${gpaValue}`);
+        }
+    };
+    
+    // 为所有 GPA 下拉框绑定事件
+    contentDiv.querySelectorAll('select[data-field="gpa"]').forEach(select => {
+        const courseCode = select.dataset.code;
+        const customInputId = select.id.replace('gpa-select-', 'gpa-custom-');
+        const customInput = document.getElementById(customInputId);
+        
+        select.addEventListener('change', () => {
+            if (select.value === 'custom') {
+                customInput.style.display = 'inline-block';
+                customInput.focus();
+            } else {
+                customInput.style.display = 'none';
+                autoSaveGPA(courseCode, select.closest('tr'));
+            }
+        });
+    });
+    
+    // 为所有自定义 GPA 输入框绑定事件
+    contentDiv.querySelectorAll('input[data-field="gpa-custom"]').forEach(input => {
+        const courseCode = input.dataset.code;
+        input.addEventListener('change', () => {
+            autoSaveGPA(courseCode, input.closest('tr'));
+        });
+    });
+    
+    // 绑定计算按钮事件
+    const calcBtn = document.getElementById('gm-estimate-calc');
+    if (calcBtn) {
+        calcBtn.onclick = () => {
+            calculatePredictedGPA(contentDiv, allGrades, currentSemesterCourses, currentGPA, gpaRankData, currentSemester);
+        };
+    }
+    
+    // 绑定「前往课表页面获取」或「刷新课表」按钮事件
+    const fetchBtn = contentDiv.querySelector('#gm-fetch-course-btn') || contentDiv.querySelector('#gm-refresh-course-btn');
+    if (fetchBtn) {
+        fetchBtn.addEventListener('click', () => {
+            navigateToCourseTablePage();
+        });
+    }
+}
+
+/**
+ * 计算预测 GPA
+ */
+function calculatePredictedGPA(contentDiv, allGrades, currentSemesterCourses, currentGPA, gpaRankData, currentSemester) {
+    // 中文等级制成绩映射
+    const chineseGradeMap = { '优秀': 4.0, '良好': 3.0, '中等': 2.0, '及格': 1.3, '不及格': 0.0 };
+    const pnPGrades = ['通过', 'P', '不通过', 'NP'];
+    
+    // === 预检查：检测未出分课程是否都已选择GPA ===
+    const missingItems = [];
+    currentSemesterCourses.forEach(course => {
+        if (course['已出分']) return; // 跳过已出分的
+        
+        const row = contentDiv.querySelector(`tr[data-code="${course['课程代码']}"]`);
+        if (!row) return;
+        
+        // 检查GPA
+        const gpaSelect = row.querySelector('select[data-field="gpa"]');
+        const gpaCustomInput = row.querySelector('input[data-field="gpa-custom"]');
+        let gpaValue = '';
+        if (gpaSelect?.value) {
+            if (gpaSelect.value === 'custom') {
+                gpaValue = gpaCustomInput?.value || '';
+            } else {
+                gpaValue = gpaSelect.value;
+            }
+        }
+        const hasGpa = gpaValue && !isNaN(parseFloat(gpaValue));
+        
+        if (!hasGpa) {
+            missingItems.push(course['课程名称']);
+        }
+    });
+    
+    // 如果有未填写的，显示提醒
+    if (missingItems.length > 0) {
+        const resultDiv = document.getElementById('gm-estimate-result');
+        const resultA = document.getElementById('gm-result-a');
+        const resultB = document.getElementById('gm-result-b');
+        resultDiv.style.display = 'block';
+        resultA.innerHTML = `<span style="color:#E6A23C;">⚠️ 请先为以下课程选择预估 GPA：</span>
+            <ul style="margin:8px 0;padding-left:20px;font-size:13px;">
+                ${missingItems.map(item => `<li>${item}</li>`).join('')}
+            </ul>`;
+        resultB.innerHTML = '';
+        return;
+    }
+    
+    Logger.log('GPA 预测', `当前学期: ${currentSemester || '未知'}`);
+    
+    // 1. 计算本学期开始前的成绩（之前学期的成绩）
+    let previousCredits = 0;
+    let previousPoints = 0;
+    let previousCount = 0;
+    
+    allGrades.forEach(g => {
+        const credits = parseFloat(g['学分']);
+        const score = g['成绩'];
+        const semester = g['学期'];
+        let gp = parseFloat(g['绩点']);
+        
+        if (isNaN(credits) || credits <= 0) return;
+        if (gp === null || isNaN(gp)) return;
+        if (pnPGrades.includes(score)) return;
+        
+        // 处理中文等级制成绩
+        if (typeof score === 'string' && chineseGradeMap.hasOwnProperty(score)) {
+            gp = chineseGradeMap[score];
+        }
+        
+        // 只计算本学期开始前的成绩
+        if (semester !== currentSemester) {
+            previousCredits += credits;
+            previousPoints += credits * gp;
+            previousCount++;
+        }
+    });
+    
+    Logger.log('GPA 预测', `本学期开始前: ${previousCount} 门, 学分 ${previousCredits.toFixed(1)}, 绩点 ${previousPoints.toFixed(2)}`);
+    
+    // 2. 从当前学期课程表格中收集数据（包括已出分和未出分）
+    let currentSemCredits = 0;
+    let currentSemPoints = 0;
+    let gradedCount = 0;
+    let estimatedCount = 0;
+    
+    currentSemesterCourses.forEach(course => {
+        const row = contentDiv.querySelector(`tr[data-code="${course['课程代码']}"]`);
+        if (!row) return;
+        
+        // 学分：可能是 input 或 hidden input
+        const creditInput = row.querySelector('input[data-field="credits"]');
+        let credits = 0;
+        if (creditInput && creditInput.value) {
+            credits = parseFloat(creditInput.value);
+        } else if (course['学分']) {
+            credits = parseFloat(course['学分']);
+        }
+        
+        if (isNaN(credits) || credits <= 0) {
+            Logger.log('GPA 预测', `课程 ${course['课程名称']}: 学分无效，跳过`);
+            return;
+        }
+        
+        // GPA：已出分从hidden input获取，未出分从select获取
+        let gpa = NaN;
+        const gpaHiddenInput = row.querySelector('input[data-field="gpa"][data-graded="true"]');
+        
+        if (gpaHiddenInput) {
+            // 已出分的课程
+            gpa = parseFloat(gpaHiddenInput.value);
+            if (!isNaN(gpa)) {
+                gradedCount++;
+                Logger.log('GPA 预测', `课程 ${course['课程名称']}: 已出分, 学分=${credits}, GPA=${gpa}`);
+            }
+        } else {
+            // 未出分的课程，从下拉框获取
+            const gpaSelect = row.querySelector('select[data-field="gpa"]');
+            const gpaCustomInput = row.querySelector('input[data-field="gpa-custom"]');
+            
+            if (gpaSelect && gpaSelect.value) {
+                if (gpaSelect.value === 'custom') {
+                    if (gpaCustomInput && gpaCustomInput.value) {
+                        gpa = parseFloat(gpaCustomInput.value);
+                    }
+                } else {
+                    gpa = parseFloat(gpaSelect.value);
+                }
+            }
+            
+            if (!isNaN(gpa) && gpa >= 0 && gpa <= 4.3) {
+                estimatedCount++;
+                Logger.log('GPA 预测', `课程 ${course['课程名称']}: 预估, 学分=${credits}, GPA=${gpa}`);
+            }
+        }
+        
+        // 累加有效数据
+        if (!isNaN(gpa) && gpa >= 0 && gpa <= 4.3) {
+            currentSemCredits += credits;
+            currentSemPoints += credits * gpa;
+        }
+    });
+    
+    Logger.log('GPA 预测', `本学期: 已出分 ${gradedCount} 门, 预估 ${estimatedCount} 门, 总学分 ${currentSemCredits.toFixed(1)}, 总绩点 ${currentSemPoints.toFixed(2)}`);
+    
+    // 显示结果
+    const resultDiv = document.getElementById('gm-estimate-result');
+    const resultA = document.getElementById('gm-result-a');
+    const resultB = document.getElementById('gm-result-b');
+    
+    // 计算各项 GPA
+    const previousGPA = previousCredits > 0 ? previousPoints / previousCredits : 0;
+    const currentSemGPA = currentSemCredits > 0 ? currentSemPoints / currentSemCredits : 0;
+    const totalAllCredits = previousCredits + currentSemCredits;
+    const totalAllPoints = previousPoints + currentSemPoints;
+    const totalAllGPA = totalAllCredits > 0 ? totalAllPoints / totalAllCredits : 0;
+    
+    resultDiv.style.display = 'block';
+    resultA.innerHTML = `
+        <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <tr style="background:#f5f7fa;">
+                <th style="padding:8px;border:1px solid #ebeef5;text-align:center;">项目</th>
+                <th style="padding:8px;border:1px solid #ebeef5;text-align:center;">学分</th>
+                <th style="padding:8px;border:1px solid #ebeef5;text-align:center;">GPA</th>
+            </tr>
+            <tr>
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;">本学期开始前</td>
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;">${previousCredits.toFixed(1)}</td>
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;font-weight:bold;">${previousGPA.toFixed(4)}</td>
+            </tr>
+            <tr>
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;">本学期</td>
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;">${currentSemCredits.toFixed(1)}</td>
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;font-weight:bold;">${currentSemGPA.toFixed(4)}</td>
+            </tr>
+            <tr style="background:#ecf5ff;">
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;font-weight:bold;color:#409EFF;">预测总 GPA</td>
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;font-weight:bold;color:#409EFF;">${totalAllCredits.toFixed(1)}</td>
+                <td style="padding:8px;border:1px solid #ebeef5;text-align:center;font-weight:bold;color:#409EFF;font-size:16px;">${totalAllGPA.toFixed(4)}</td>
+            </tr>
+        </table>
+    `;
+    resultB.innerHTML = `<small style="color:#909399;">本学期: 已出分 ${gradedCount} 门 + 预估 ${estimatedCount} 门</small>`;
+}
+
+/**
+ * 格式化缓存时间差为可读文本
+ */
+function formatCacheAge(ms) {
+    const minutes = Math.floor(ms / 1000 / 60);
+    if (minutes < 1) return '不到 1 分钟';
+    if (minutes < 60) return `${minutes} 分钟`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} 小时`;
+    const days = Math.floor(hours / 24);
+    return `${days} 天`;
+}
+
+// 旧版 handleGpaEstimateClick 已废弃，统一使用 handleGpaEstimateClickImmediate
 
 // ----------------- 2.4 学生画像增强 -----------------
 
@@ -4267,8 +5174,13 @@ function initEvaluationHelper() {
     };
 
     const startObserve = () => {
+        let debounceTimer = null;
         const observer = new MutationObserver(() => {
-            if (location.href.includes('evaluation-student-frontend')) injectPageButton();
+            // 使用防抖，避免频繁触发
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                if (location.href.includes('evaluation-student-frontend')) injectPageButton();
+            }, CONSTANTS.DEBOUNCE_DELAY);
         });
         observer.observe(document.body, { childList: true, subtree: true });
         injectPageButton();
@@ -4283,7 +5195,7 @@ function initEvaluationHelper() {
 const PersonnelSearch = {
 
     STORAGE_KEY: "nwpu_synced_token",
-    API_BASE: "https://electronic-signature.nwpu.edu.cn/api/local-user/page",
+    API_BASE: CONSTANTS.API_PERSONNEL,
     state: { page: 1, loading: false, hasMore: true, keyword: "" },
 
     // 1. Token 同步逻辑 (运行在 ecampus 域名下)
@@ -4569,6 +5481,337 @@ const PersonnelSearch = {
     }
 };
 
+/**
+ * 自动点击"全部课程"标签并滚动到底部（从 GPA 预测页面跳转过来时使用）
+ */
+function autoClickAllCoursesAndScroll() {
+    const MAX_WAIT = 15000; // 最多等 15 秒
+    const CHECK_INTERVAL = 500;
+    let elapsed = 0;
+
+    const tryClick = () => {
+        if (elapsed >= MAX_WAIT) {
+            Logger.warn('课表自动操作', '等待超时，页面可能未完全加载');
+            return;
+        }
+        elapsed += CHECK_INTERVAL;
+
+        // 查找所有可能的"全部课程"按钮/标签
+        const allClickTargets = document.querySelectorAll('a, button, [role="tab"], li, span');
+        let clicked = false;
+
+        for (const el of allClickTargets) {
+            const text = (el.textContent || '').trim();
+            if (text === '全部课程' || text === '课程列表') {
+                Logger.log('课表自动操作', `找到并点击: "${text}"`);
+                el.click();
+                clicked = true;
+                break;
+            }
+        }
+
+        if (clicked) {
+            // 点击后等待列表渲染，然后滚动到底部
+            setTimeout(() => {
+                scrollToBottom();
+            }, 2000);
+        } else {
+            // 还没找到按钮，继续等待
+            setTimeout(tryClick, CHECK_INTERVAL);
+        }
+    };
+
+    // 等待页面初始加载
+    const startAutoClick = () => {
+        setTimeout(tryClick, 1500);
+    };
+
+    if (document.readyState === 'complete') {
+        startAutoClick();
+    } else {
+        window.addEventListener('load', startAutoClick);
+    }
+}
+
+/**
+ * 滚动到页面底部
+ */
+function scrollToBottom() {
+    // 尝试找到课表内容容器
+    const containers = [
+        document.querySelector('.course-table-container'),
+        document.querySelector('.main-content'),
+        document.querySelector('#courseTableForm'),
+        document.querySelector('.content-wrapper'),
+        document.documentElement
+    ].filter(Boolean);
+
+    for (const container of containers) {
+        container.scrollTop = container.scrollHeight;
+    }
+    // 同时也滚动窗口
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    Logger.log('课表自动操作', '已滚动到页面底部');
+}
+
+/**
+ * 显示自动获取成功的 Toast 提示
+ * @param {number} count 获取到的课程数量
+ */
+function showAutoFetchSuccessToast(count) {
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+        background: #67C23A; color: #fff; padding: 16px 32px; border-radius: 8px;
+        font-size: 15px; z-index: 99999; box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        display: flex; align-items: center; gap: 10px; animation: gm-toast-in 0.3s ease;
+    `;
+    toast.innerHTML = `
+        <span style="font-size:22px;">✅</span>
+        <div>
+            <div style="font-weight:bold;">课表数据已自动缓存</div>
+            <div style="font-size:13px;margin-top:4px;opacity:0.9;">共获取 ${count} 门课程，可返回使用 GPA 预测功能</div>
+        </div>
+    `;
+
+    // 添加动画样式
+    if (!document.getElementById('gm-toast-style')) {
+        const style = document.createElement('style');
+        style.id = 'gm-toast-style';
+        style.textContent = `
+            @keyframes gm-toast-in { from { opacity: 0; transform: translateX(-50%) translateY(-20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+            @keyframes gm-toast-out { from { opacity: 1; transform: translateX(-50%) translateY(0); } to { opacity: 0; transform: translateX(-50%) translateY(-20px); } }
+        `;
+        document.head.appendChild(style);
+    }
+
+    document.body.appendChild(toast);
+
+    // 5秒后自动消失
+    setTimeout(() => {
+        toast.style.animation = 'gm-toast-out 0.3s ease forwards';
+        setTimeout(() => toast.remove(), 300);
+    }, 5000);
+}
+
+// --- 课表页面缓存功能 ---
+function cacheCourseTableData() {
+    Logger.log('课表缓存', '开始解析课表页面...');
+    
+    let courses = [];
+    let semester = '当前学期';
+    const seenCodes = new Set();
+    
+    // 获取学期信息
+    const semesterSelect = document.querySelector('select[id*="semester"], select[name*="semester"]');
+    if (semesterSelect) {
+        semester = semesterSelect.selectedOptions[0]?.text || semester;
+        Logger.log('课表缓存', `学期选择器找到: ${semester}`);
+    }
+    
+    // 方法1: 从"全部课程"列表视图解析（优先）
+    // 结构: tr.lessonInfo > td.courseInfo[data-course="课程名[课程代码]"] > span.span-gap > "学分(X)"
+    const lessonRows = document.querySelectorAll('tr.lessonInfo');
+    Logger.log('课表缓存', `找到 ${lessonRows.length} 行 lessonInfo`);
+    
+    if (lessonRows.length > 0) {
+        // 建立学期映射
+        const semesterMap = new Map();
+        const semesterRows = document.querySelectorAll('tr.semester_tr');
+        semesterRows.forEach(row => {
+            const semId = row.getAttribute('data-semester');
+            const semName = row.querySelector('td')?.textContent?.trim() || '';
+            if (semId && semName) {
+                semesterMap.set(semId, semName);
+            }
+        });
+        
+        lessonRows.forEach(row => {
+            const courseInfoTd = row.querySelector('td.courseInfo');
+            if (!courseInfoTd) return;
+            
+            // 从 data-course 属性获取课程名和代码，格式: "课程名[代码]"
+            const dataCourse = courseInfoTd.getAttribute('data-course');
+            if (!dataCourse) return;
+            
+            const match = dataCourse.match(/^(.+?)\[(.+?)\]$/);
+            if (!match) return;
+            
+            const name = match[1].trim();
+            const code = match[2].trim();
+            
+            // 从 span.span-gap 提取学分，支持多种格式
+            let credits = '';
+            const creditSpan = courseInfoTd.querySelector('span.span-gap');
+            if (creditSpan) {
+                const spanText = creditSpan.textContent;
+                // 尝试多种格式匹配
+                const patterns = [
+                    /学分\(([0-9.]+)\)/,       // 学分(4)
+                    /\(([0-9.]+)学分\)/,        // (4学分)
+                    /学分[：:]\s*([0-9.]+)/,    // 学分：4 或 学分:4
+                    /([0-9.]+)\s*学分/,          // 4学分 或 4.0 学分
+                    /学分\s*([0-9.]+)/,          // 学分4 或 学分 4
+                ];
+                for (const pattern of patterns) {
+                    const match = spanText.match(pattern);
+                    if (match) {
+                        credits = match[1];
+                        Logger.log('课表缓存', `从span-gap解析学分: ${credits} (文本: ${spanText})`);
+                        break;
+                    }
+                }
+            }
+            // 如果 span.span-gap 没找到学分，尝试从整个单元格文本中提取
+            const cellText = courseInfoTd.textContent;
+            if (!credits) {
+                const patterns = [
+                    /学分\(([0-9.]+)\)/,
+                    /\(([0-9.]+)学分\)/,
+                    /学分[：:]\s*([0-9.]+)/,
+                    /([0-9.]+)\s*学分/,
+                    /学分\s*([0-9.]+)/,
+                ];
+                for (const pattern of patterns) {
+                    const match = cellText.match(pattern);
+                    if (match) {
+                        credits = match[1];
+                        Logger.log('课表缓存', `从单元格文本解析学分: ${credits}`);
+                        break;
+                    }
+                }
+            }
+            // 最后尝试：查找单元格中所有数字，取最后一个作为学分（课表页常见格式）
+            if (!credits) {
+                const allNumbers = cellText.match(/[0-9.]+/g);
+                if (allNumbers && allNumbers.length > 0) {
+                    // 假设最后一个数字是学分（课程代码通常在前）
+                    const lastNum = allNumbers[allNumbers.length - 1];
+                    // 学分通常在0.5-10之间
+                    const numVal = parseFloat(lastNum);
+                    if (numVal >= 0.5 && numVal <= 10) {
+                        credits = lastNum;
+                        Logger.log('课表缓存', `从数字推断学分: ${credits}`);
+                    }
+                }
+            }
+            
+            // 获取学期
+            const semId = row.getAttribute('data-semester');
+            const rowSemester = semesterMap.get(semId) || semester;
+            
+            if (!code || !name) return;
+            if (seenCodes.has(code)) return;
+            
+            seenCodes.add(code);
+            Logger.log('课表缓存', `课程: ${name} | 代码: ${code} | 学分: ${credits || '(未找到)'} | 单元格文本: ${cellText.substring(0, 100)}...`);
+            courses.push({
+                code,
+                name,
+                credits,
+                semester: rowSemester,
+                source: '课表'
+            });
+        });
+        
+        if (courses.length > 0) {
+            Logger.log('课表缓存', `从列表视图解析到 ${courses.length} 门课程`);
+        }
+    }
+    
+    // 方法2: 如果方法1没找到，尝试从格子视图解析
+    if (courses.length === 0) {
+        const tables = document.querySelectorAll('table');
+        let courseTable = null;
+        
+        for (const table of tables) {
+            const headerText = table.textContent.slice(0, 50);
+            if (headerText.includes('星期') || headerText.includes('周一')) {
+                courseTable = table;
+                break;
+            }
+        }
+        
+        if (courseTable) {
+            Logger.log('课表缓存', '尝试从格子视图解析');
+            const cells = courseTable.querySelectorAll('td');
+            cells.forEach(td => {
+                const text = td.textContent.trim();
+                if (text.length < 10) return;
+                
+                // 提取课程代码
+                const codeMatch = text.match(/([A-Z]\d{2}[A-Z]?\d{4,})/);
+                if (!codeMatch) return;
+                
+                const code = codeMatch[1];
+                
+                // 提取学分，支持多种格式
+                let credits = '';
+                const creditPatterns = [
+                    /学分\(([0-9.]+)\)/,
+                    /\(([0-9.]+)学分\)/,
+                    /学分[：:]\s*([0-9.]+)/,
+                    /([0-9.]+)\s*学分/,
+                ];
+                for (const pattern of creditPatterns) {
+                    const creditMatch = text.match(pattern);
+                    if (creditMatch) {
+                        credits = creditMatch[1];
+                        break;
+                    }
+                }
+                
+                // 提取课程名称
+                const codeIndex = text.indexOf(code);
+                const beforeCode = text.slice(0, codeIndex);
+                const name = beforeCode.replace(/^[本选必修考]+/, '').trim();
+                
+                if (!code || !name) return;
+                if (seenCodes.has(code)) return;
+                
+                seenCodes.add(code);
+                courses.push({
+                    code,
+                    name,
+                    credits,
+                    semester,
+                    source: '课表'
+                });
+            });
+        }
+    }
+    
+    if (courses.length > 0) {
+        const withCredits = courses.filter(c => c.credits).length;
+        
+        // 保护机制：如果本次解析的数据缺少学分信息（通常来自"我的课表"格子视图），
+        // 且已有缓存包含完整学分信息，则不覆盖已有缓存
+        if (withCredits === 0) {
+            try {
+                const existingRaw = GM_getValue(CONSTANTS.COURSE_TABLE_CACHE_KEY, null);
+                if (existingRaw) {
+                    const existing = JSON.parse(existingRaw);
+                    const existingWithCredits = (existing.courses || []).filter(c => c.credits).length;
+                    if (existingWithCredits > 0) {
+                        Logger.log('课表缓存', `本次解析无学分信息，已有缓存包含 ${existingWithCredits} 门有学分课程，跳过覆盖`);
+                        return;
+                    }
+                }
+            } catch (e) { /* 解析失败则继续写入 */ }
+        }
+        
+        const cacheData = {
+            timestamp: Date.now(),
+            semester,
+            courses
+        };
+        GM_setValue(CONSTANTS.COURSE_TABLE_CACHE_KEY, JSON.stringify(cacheData));
+        Logger.log('课表缓存', `已缓存 ${courses.length} 门课程，其中 ${withCredits} 门有学分信息`);
+    } else {
+        Logger.warn('课表缓存', '未解析到任何课程');
+    }
+}
+
 // --- 3. 脚本主入口 (路由分发) ---
 
 function runMainFeatures() {
@@ -4619,8 +5862,87 @@ function runMainFeatures() {
         initProgramPageEnhancement(); // 功能8
     }
 
-    // 5. 顶层主页
-    else if (window.top === window.self) {
+    // 5. 课表页面 - 缓存课表数据
+    else if (href.includes('/student/for-std/course-table')) {
+        // 检查是否是从 GPA 预测页面自动跳转过来的
+        const autoFetchFlag = GM_getValue('jwxt_auto_fetch_course_table', 0);
+        const isAutoFetch = autoFetchFlag && (Date.now() - autoFetchFlag < 30000); // 30秒内有效
+        
+        if (isAutoFetch) {
+            GM_setValue('jwxt_auto_fetch_course_table', 0); // 清除标记
+            Logger.log('课表缓存', '检测到自动获取标记，将自动展开全部课程并缓存');
+        }
+
+        // 等待页面加载完成后解析
+        const parseAndCache = () => {
+            setTimeout(() => {
+                cacheCourseTableData();
+            }, 1500);
+        };
+        if (document.readyState === 'complete') {
+            parseAndCache();
+        } else {
+            window.addEventListener('load', parseAndCache);
+        }
+        
+        // 监听学期切换
+        setTimeout(() => {
+            const semesterSelect = document.querySelector('select[id*="semester"], select[name*="semester"]');
+            if (semesterSelect) {
+                semesterSelect.addEventListener('change', () => {
+                    setTimeout(cacheCourseTableData, 1000);
+                });
+            }
+        }, 2000);
+        
+        // 使用 MutationObserver 监听"全部课程"列表的出现
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                if (mutation.type === 'childList') {
+                    // 检查是否有 lessonInfo 元素出现
+                    const lessonRows = document.querySelectorAll('tr.lessonInfo');
+                    if (lessonRows.length > 0) {
+                        Logger.log('课表缓存', '检测到课程列表出现，开始缓存');
+                        cacheCourseTableData();
+                        
+                        // 如果是自动跳转过来的，缓存完成后显示成功提示
+                        if (isAutoFetch) {
+                            showAutoFetchSuccessToast(lessonRows.length);
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+        
+        // 延迟启动 observer，等页面准备好
+        setTimeout(() => {
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+            // 60秒后停止观察
+            setTimeout(() => observer.disconnect(), 60000);
+        }, 2000);
+        
+        // 监听所有点击事件，当用户点击可能的"我的课表"、"全部课程"按钮时触发缓存
+        document.addEventListener('click', (e) => {
+            const target = e.target;
+            const text = target.textContent || target.innerText || '';
+            if (text.includes('我的课表') || text.includes('全部课程') || text.includes('课程列表')) {
+                Logger.log('课表缓存', `检测到"${text}"按钮点击`);
+                setTimeout(cacheCourseTableData, 1500);
+            }
+        });
+        
+        // 如果是自动跳转，自动点击"全部课程"标签并滚动到底部
+        if (isAutoFetch) {
+            autoClickAllCoursesAndScroll();
+        }
+    }
+
+    // 6. 顶层主页
+    if (window.top === window.self) {
         initializeHomePageFeatures();
         // 延迟启动后台控制器
         setTimeout(() => {
