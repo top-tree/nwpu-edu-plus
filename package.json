@@ -1,0 +1,34 @@
+{
+  "name": "nwpu-edu-plus",
+  "version": "1.0.0",
+  "description": "基于 [翱翔教务功能加强](https://greasyfork.org/zh-CN/scripts/524099-%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA) 油猴脚本 v1.7.2 二次开发，**非原作者**。",
+  "main": "main.user.js",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "jest": {
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "testEnvironment": "node",
+    "verbose": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/top-tree/nwpu-edu-plus.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/top-tree/nwpu-edu-plus/issues"
+  },
+  "homepage": "https://github.com/top-tree/nwpu-edu-plus#readme",
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "jsdom": "^28.1.0"
+  }
+}
