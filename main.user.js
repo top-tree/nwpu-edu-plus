@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翱翔教务功能加强(非官方)
 // @namespace    http://tampermonkey.net/
-// @version      1.7.2
+// @version      1.7.3
 // @description  1.提供GPA分析报告；2. 导出课程成绩与教学班排名；3.更好的“学生画像”显示；4.选课助手；5.课程关注与后台同步；6.一键自动评教；7.人员信息检索
 // @author       47
 // @match        https://jwxt.nwpu.edu.cn/*
@@ -2084,11 +2084,50 @@ function navigateToCourseTablePage() {
     GM_setValue('jwxt_auto_fetch_course_table', Date.now());
     Logger.log('课表获取', '正在跳转到课表页面...');
     
-    // 如果当前在 iframe 中，使用 top 跳转
-    if (window.top !== window.self) {
-        window.top.location.href = courseTableUrl;
+    // 关闭 GPA 预测弹窗
+    const overlay = document.querySelector('.gpa-report-overlay');
+    if (overlay) overlay.remove();
+
+    // 策略1：查找导航菜单中的"我的课表"链接并点击（保留教务系统的 iframe 框架和菜单栏）
+    let courseTableLink = document.querySelector('a[onclick*="course-table"]') ||
+                          document.querySelector('a[href*="/student/for-std/course-table"]') ||
+                          document.querySelector('a[data-text="我的课表"]');
+    
+    // 如果当前在 iframe 中，尝试在顶层窗口查找菜单链接
+    if (!courseTableLink && window.top !== window.self) {
+        try {
+            courseTableLink = window.top.document.querySelector('a[onclick*="course-table"]') ||
+                              window.top.document.querySelector('a[href*="/student/for-std/course-table"]') ||
+                              window.top.document.querySelector('a[data-text="我的课表"]');
+        } catch (e) { /* 忽略跨域错误 */ }
+    }
+
+    if (courseTableLink) {
+        Logger.log('课表获取', '找到菜单链接，通过点击导航跳转');
+        courseTableLink.click();
     } else {
-        window.location.href = courseTableUrl;
+        // 策略2：查找内容 iframe，仅修改其 src（不破坏顶层页面）
+        let contentIframe = null;
+        try {
+            const iframes = document.querySelectorAll('iframe');
+            for (const f of iframes) {
+                // 忽略插件自己创建的 iframe
+                if (f.id && (f.id.startsWith('gm') || f.id.startsWith('gm_'))) continue;
+                if (f.offsetParent !== null && f.offsetHeight > 300 && f.offsetWidth > 300) {
+                    contentIframe = f;
+                    break;
+                }
+            }
+        } catch (e) { /* 忽略 */ }
+
+        if (contentIframe) {
+            Logger.log('课表获取', '通过修改内容 iframe src 跳转');
+            contentIframe.src = courseTableUrl;
+        } else {
+            // 策略3：最终兜底 - 直接修改当前窗口 URL
+            Logger.warn('课表获取', '未找到导航菜单或内容 iframe，直接跳转（菜单栏可能消失）');
+            window.location.href = courseTableUrl;
+        }
     }
 }
 
@@ -5190,7 +5229,6 @@ function initEvaluationHelper() {
     else window.addEventListener('load', startObserve);
 }
 
-
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.12 人员信息检索模块 =-=-=-=-=-=-=-=-=-=-=-=-=
 const PersonnelSearch = {
 
@@ -5812,6 +5850,250 @@ function cacheCourseTableData() {
     }
 }
 
+// =-=-=-=-=-=-=-=-=-=-=-=-= 2.13 我的课表教材信息显示 =-=-=-=-=-=-=-=-=-=-=-=-=
+const TextbookInfoModule = {
+    init() {
+        if (!window.location.href.includes('/student/for-std/course-table')) return;
+        Logger.log('2.13', '课表教材信息模块初始化');
+
+        this.injectStyles();
+        this.interceptNetwork();
+    },
+
+    // 1. 拦截课表数据的请求
+    interceptNetwork() {
+        const _send = unsafeWindow.XMLHttpRequest.prototype.send;
+        const _open = unsafeWindow.XMLHttpRequest.prototype.open;
+        const that = this;
+
+        // 劫持 open 获取 URL
+        unsafeWindow.XMLHttpRequest.prototype.open = function(method, url) {
+            this._gm_textbook_url = url;
+            return _open.apply(this, arguments);
+        };
+
+        // 劫持 send 监听响应
+        unsafeWindow.XMLHttpRequest.prototype.send = function(data) {
+            this.addEventListener('load', function() {
+                if (this._gm_textbook_url && this._gm_textbook_url.includes('/print-data/')) {
+                    try {
+                        const responseJson = JSON.parse(this.responseText);
+                        that.processData(responseJson);
+                    } catch (e) {
+                        Logger.error('2.13', '解析课表 print-data 失败', e);
+                    }
+                }
+            }, { once: true });
+            return _send.apply(this, arguments);
+        };
+    },
+
+    // 2. 递归提取课程信息
+    processData(jsonData) {
+        const courseMap = new Map();
+
+        const findCourses = (obj) => {
+            if (Array.isArray(obj)) {
+                obj.forEach(item => findCourses(item));
+            } else if (obj !== null && typeof obj === 'object') {
+                if (obj.course && obj.course.id && obj.course.nameZh) {
+                    // key: id, value: nameZh
+                    courseMap.set(obj.course.id, obj.course.nameZh);
+                }
+                for (let key in obj) {
+                    findCourses(obj[key]);
+                }
+            }
+        };
+
+        findCourses(jsonData);
+
+        if (courseMap.size > 0) {
+            Logger.log('2.13', `提取到 ${courseMap.size} 门课程，准备获取教材信息`);
+            this.fetchTextbooks(courseMap);
+        }
+    },
+
+    // 3. 并发获取教材详情页面并解析
+    async fetchTextbooks(courseMap) {
+        this.renderContainer('正在努力获取全本学期课程的教材信息，请稍候...');
+
+        const allTextbooks = [];
+        const promises = [];
+
+        for (const [courseId, courseName] of courseMap.entries()) {
+            const p = fetch(`https://jwxt.nwpu.edu.cn/student/for-std/lesson-search/info/${courseId}`)
+                .then(res => res.text())
+                .then(html => {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(html, "text/html");
+                    const rows = doc.querySelectorAll('.textbook-table tbody tr');
+
+                    rows.forEach(row => {
+                        const tds = row.querySelectorAll('td');
+                        if (tds.length === 0) return;
+
+                        // 处理存在 rowspan 的列差情况 (一般有8列，如果没有类型列就是7列)
+                        const offset = tds.length >= 8 ? 2 : 1;
+
+                        // 防止越界报错
+                        if (tds.length < 6) return;
+
+                        allTextbooks.push({
+                            courseId: courseId, // 关键：保存 courseId 用于跳转
+                            courseName: courseName,
+                            name: tds[offset] ? tds[offset].innerText.trim() : '-',
+                            author: tds[offset + 1] ? tds[offset + 1].innerText.trim() : '-',
+                            isbn: tds[offset + 2] ? tds[offset + 2].innerText.trim() : '-',
+                            publisher: tds[offset + 3] ? tds[offset + 3].innerText.trim() : '-',
+                            edition: tds[offset + 4] ? tds[offset + 4].innerText.trim() : '-',
+                            pubDate: tds[offset + 5] ? tds[offset + 5].innerText.trim() : '-'
+                        });
+                    });
+                })
+                .catch(err => {
+                    Logger.warn('2.13', `获取 ${courseName} 教材失败`, err);
+                });
+            promises.push(p);
+        }
+
+        await Promise.allSettled(promises);
+        this.renderTable(allTextbooks);
+    },
+
+    // 4. 注入UI样式
+    injectStyles() {
+        if (document.getElementById('gm-textbook-style')) return;
+        const style = document.createElement('style');
+        style.id = 'gm-textbook-style';
+        style.textContent = `
+            .gm-textbook-wrapper {
+                margin: 20px; padding: 20px; background: #fff;
+                border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            }
+            .gm-textbook-title {
+                font-size: 16px; font-weight: bold; color: #303133; margin-bottom: 15px;
+                border-left: 4px solid #409EFF; padding-left: 10px;
+            }
+            .gm-textbook-table {
+                width: 100%; border-collapse: collapse; font-size: 13px;
+            }
+            .gm-textbook-table th, .gm-textbook-table td {
+                border: 1px solid #ebeef5; padding: 10px 15px; text-align: center; vertical-align: middle;color: #606266;
+            }
+            .gm-textbook-table th {
+                background: #f5f7fa; font-weight: bold; color: #333;
+            }
+            .gm-textbook-table tr:hover { background-color: #f5f7fa; }
+            .gm-textbook-empty { text-align: center; color: #909399; padding: 30px; }
+            .gm-textbook-course { font-weight: bold; color: #409EFF; }
+            .gm-textbook-course a { color: #409EFF; text-decoration: none; transition: color 0.2s; }
+            .gm-textbook-course a:hover { color: #66b1ff; text-decoration: underline; }
+        `;
+        document.head.appendChild(style);
+    },
+
+    // 5. 渲染基础容器
+    renderContainer(msg) {
+        let container = document.getElementById('gm-textbook-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'gm-textbook-container';
+            container.className = 'gm-textbook-wrapper';
+
+            // 尝试将其挂载到页面的主内容区底部
+            const target = document.querySelector('.main-content') || document.querySelector('#app') || document.body;
+            target.appendChild(container);
+        }
+
+        container.innerHTML = `
+            <div class="gm-textbook-title">本学期课程教材清单</div>
+            <div class="gm-textbook-empty">${msg}</div>
+        `;
+    },
+
+    // 6. 渲染最终表格
+    renderTable(dataList) {
+        const container = document.getElementById('gm-textbook-container');
+        if (!container) return;
+
+        if (dataList.length === 0) {
+            container.innerHTML = `
+                <div class="gm-textbook-title">本学期课程教材清单</div>
+                <div class="gm-textbook-empty">本学期的所有课程目前均未在教务系统中登记教材信息。</div>
+            `;
+            return;
+        }
+
+        // 去重
+        const uniqueKeys = new Set();
+        const finalData = [];
+        dataList.forEach(item => {
+            const key = `${item.courseName}-${item.isbn}-${item.name}`;
+            if (!uniqueKeys.has(key)) {
+                uniqueKeys.add(key);
+                finalData.push(item);
+            }
+        });
+
+        // 按课程名排序，确保同一课程排在一起
+        finalData.sort((a, b) => a.courseName.localeCompare(b.courseName));
+
+        // 统计每门课程有多少本教材，用于 rowspan 合并单元格
+        const courseCountMap = {};
+        finalData.forEach(item => {
+            courseCountMap[item.courseName] = (courseCountMap[item.courseName] || 0) + 1;
+        });
+
+        let rowsHtml = '';
+        let currentCourse = '';
+
+        finalData.forEach(tb => {
+            rowsHtml += `<tr>`;
+
+            // 如果是该课程的第一本书，输出带有 rowspan 的课程名单元格
+            if (tb.courseName !== currentCourse) {
+                currentCourse = tb.courseName;
+                const courseUrl = `https://jwxt.nwpu.edu.cn/student/for-std/lesson-search/info/${tb.courseId}`;
+                rowsHtml += `<td rowspan="${courseCountMap[currentCourse]}" class="gm-textbook-course">
+                                <a href="${courseUrl}" target="_blank" title="在新标签页中查看课程详情">${tb.courseName}</a>
+                             </td>`;
+            }
+
+            rowsHtml += `
+                    <td>${tb.name}</td>
+                    <td>${tb.author}</td>
+                    <td>${tb.publisher}</td>
+                    <td>${tb.isbn}</td>
+                    <td>${tb.edition}</td>
+                    <td>${tb.pubDate}</td>
+                </tr>
+            `;
+        });
+
+        container.innerHTML = `
+            <div class="gm-textbook-title">本学期课程教材清单</div>
+            <table class="gm-textbook-table">
+                <thead>
+                    <tr>
+                        <th width="20%">课程名称</th>
+                        <th width="20%">教材名称</th>
+                        <th width="17%">作者</th>
+                        <th width="15%">出版社</th>
+                        <th width="10%">ISBN/编号</th>
+                        <th width="5%">版次</th>
+                        <th width="8%">出版年月</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rowsHtml}
+                </tbody>
+            </table>
+        `;
+    }
+};
+
 // --- 3. 脚本主入口 (路由分发) ---
 
 function runMainFeatures() {
@@ -5862,7 +6144,7 @@ function runMainFeatures() {
         initProgramPageEnhancement(); // 功能8
     }
 
-    // 5. 课表页面 - 缓存课表数据
+    // 5. 课表页面 - 缓存课表数据 & 教材信息显示
     else if (href.includes('/student/for-std/course-table')) {
         // 检查是否是从 GPA 预测页面自动跳转过来的
         const autoFetchFlag = GM_getValue('jwxt_auto_fetch_course_table', 0);
@@ -5939,10 +6221,19 @@ function runMainFeatures() {
         if (isAutoFetch) {
             autoClickAllCoursesAndScroll();
         }
+
+        // 教材信息显示（官方功能 2.13）
+        TextbookInfoModule.init();
+
+        // 兜底：如果课表页面意外成为顶层窗口（如旧版跳转导致框架被破坏），
+        // 也要创建悬浮球，避免插件图标消失
+        if (window.top === window.self) {
+            createFloatingMenu();
+        }
     }
 
     // 6. 顶层主页
-    if (window.top === window.self) {
+    else if (window.top === window.self) {
         initializeHomePageFeatures();
         // 延迟启动后台控制器
         setTimeout(() => {
