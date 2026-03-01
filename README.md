@@ -8,8 +8,35 @@
 
 ## 使用方法
 
-1. 安装 [Tampermonkey](https://www.tampermonkey.net/)
-2. 新建脚本，复制 `main.user.js` 中的内容保存即可
+### 第一步：安装油猴插件
+
+根据浏览器选择对应的版本进行安装，详见 [Tampermonkey](https://www.tampermonkey.net/)。
+
+![安装油猴插件](images/image1.png)
+
+### 第二步：打开油猴插件
+
+点击浏览器右上角的油猴插件图标。
+
+![点击插件](images/image2.png)
+
+### 第三步：添加新脚本
+
+在菜单中点击「添加新脚本」。
+
+![添加新脚本](images/image3.png)
+
+### 第四步：粘贴脚本代码
+
+删除默认内容，打开本项目的 `main.user.js` 文件，复制全部代码粘贴进去，然后点击「保存」。
+
+![保存脚本](images/image4.png)
+
+### 第五步：开始使用
+
+安装成功，登录翱翔教务系统即可使用。
+
+![使用效果](images/image5.png)
 
 
 ## 开发者
