@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         翱翔教务功能加强
 // @namespace    http://tampermonkey.net/
-// @version      1.7.3
+// @version      1.7.4
 // @description  1.提供GPA分析报告；2. 导出课程成绩与教学班排名；3.更好的“学生画像”显示；4.选课助手；5.课程关注与后台同步；6.一键自动评教；7.人员信息检索
-// @author       47
+// @author       leamloli
 // @match        https://jwxt.nwpu.edu.cn/*
 // @match        https://jwxt.nwpu.edu.cn/student/for-std/course-select/some-page*
 // @match        https://ecampus.nwpu.edu.cn/*
@@ -19,8 +19,6 @@
 // @require      https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js
 // @require      https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js
 // @homepage     https://greasyfork.org/zh-CN/scripts/524099-%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA
-// @downloadURL https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.user.js
-// @updateURL https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.meta.js
 // ==/UserScript==
 
 // ==================== 用户可配置区域 ====================
@@ -4570,6 +4568,17 @@ const PersonnelSearch = {
 
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.13 我的课表教材信息显示 =-=-=-=-=-=-=-=-=-=-=-=-=
 const TextbookInfoModule = {
+    // 网课平台地址配置
+    PLATFORM_MAP: {
+        '学堂在线': 'https://bknwpu.yuketang.cn/',
+        '中国大学MOOC': 'https://www.icourse163.org/spoc/schoolcloud/index.htm',
+        '超星': 'http://nwpu.mooc.chaoxing.com',
+        'MOOC': 'https://www.icourse163.org/spoc/schoolcloud/index.htm',
+        '智慧树': 'https://www.zhihuishu.com/',
+        '知到': 'https://www.zhihuishu.com/',
+        '学习通': 'https://cx.chaoxing.com/'
+    },
+
     init() {
         if (!window.location.href.includes('/student/for-std/course-table')) return;
         Logger.log('2.13', '课表教材信息模块初始化');
@@ -4584,13 +4593,11 @@ const TextbookInfoModule = {
         const _open = unsafeWindow.XMLHttpRequest.prototype.open;
         const that = this;
 
-        // 劫持 open 获取 URL
         unsafeWindow.XMLHttpRequest.prototype.open = function(method, url) {
             this._gm_textbook_url = url;
             return _open.apply(this, arguments);
         };
 
-        // 劫持 send 监听响应
         unsafeWindow.XMLHttpRequest.prototype.send = function(data) {
             this.addEventListener('load', function() {
                 if (this._gm_textbook_url && this._gm_textbook_url.includes('/print-data/')) {
@@ -4615,7 +4622,6 @@ const TextbookInfoModule = {
                 obj.forEach(item => findCourses(item));
             } else if (obj !== null && typeof obj === 'object') {
                 if (obj.course && obj.course.id && obj.course.nameZh) {
-                    // key: id, value: nameZh
                     courseMap.set(obj.course.id, obj.course.nameZh);
                 }
                 for (let key in obj) {
@@ -4634,7 +4640,7 @@ const TextbookInfoModule = {
 
     // 3. 并发获取教材详情页面并解析
     async fetchTextbooks(courseMap) {
-        this.renderContainer('正在努力获取全本学期课程的教材信息，请稍候...');
+        this.renderContainer('正在努力获取本学期课程的教材与网课信息，请稍候...');
 
         const allTextbooks = [];
         const promises = [];
@@ -4645,21 +4651,53 @@ const TextbookInfoModule = {
                 .then(html => {
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(html, "text/html");
-                    const rows = doc.querySelectorAll('.textbook-table tbody tr');
 
+                    let isOnlineCourse = false;
+                    let platformName = '';
+
+                    const baseItems = doc.querySelectorAll('.base-info-item');
+                    baseItems.forEach(item => {
+                        const labelEl = item.querySelector('.base-info-label');
+                        const valueEl = item.querySelector('.base-info-value');
+                        if (labelEl && valueEl) {
+                            const label = labelEl.innerText.trim();
+                            const value = valueEl.innerText.trim();
+
+                            // 检测课程负责人是否标记为在线开放课程
+                            if (label === '课程负责人' && value.includes('在线开放课程')) {
+                                isOnlineCourse = true;
+                            }
+                            // 提取平台链接名称
+                            if (label === '平台链接') {
+                                platformName = value;
+                            }
+                        }
+                    });
+
+                    // 如果是网课，直接作为一条特殊记录插入，不再解析教材表
+                    if (isOnlineCourse) {
+                        allTextbooks.push({
+                            courseId: courseId,
+                            courseName: courseName,
+                            isOnline: true,
+                            platformName: platformName || '未知平台', // 填充占位符，防止渲染出错
+                            name: '-', author: '-', isbn: '-', publisher: '-', edition: '-', pubDate: '-'
+                        });
+                        return; // 结束当前课程处理
+                    }
+
+                    // 常规课程：解析教材表格
+                    const rows = doc.querySelectorAll('.textbook-table tbody tr');
                     rows.forEach(row => {
                         const tds = row.querySelectorAll('td');
                         if (tds.length === 0) return;
-
-                        // 处理存在 rowspan 的列差情况 (一般有8列，如果没有类型列就是7列)
                         const offset = tds.length >= 8 ? 2 : 1;
-
-                        // 防止越界报错
                         if (tds.length < 6) return;
 
                         allTextbooks.push({
-                            courseId: courseId, // 关键：保存 courseId 用于跳转
+                            courseId: courseId,
                             courseName: courseName,
+                            isOnline: false,
                             name: tds[offset] ? tds[offset].innerText.trim() : '-',
                             author: tds[offset + 1] ? tds[offset + 1].innerText.trim() : '-',
                             isbn: tds[offset + 2] ? tds[offset + 2].innerText.trim() : '-',
@@ -4670,7 +4708,7 @@ const TextbookInfoModule = {
                     });
                 })
                 .catch(err => {
-                    Logger.warn('2.13', `获取 ${courseName} 教材失败`, err);
+                    Logger.warn('2.13', `获取 ${courseName} 信息失败`, err);
                 });
             promises.push(p);
         }
@@ -4708,6 +4746,13 @@ const TextbookInfoModule = {
             .gm-textbook-course { font-weight: bold; color: #409EFF; }
             .gm-textbook-course a { color: #409EFF; text-decoration: none; transition: color 0.2s; }
             .gm-textbook-course a:hover { color: #66b1ff; text-decoration: underline; }
+            .gm-online-cell { background: #fdf6ec; color: #e6a23c !important; font-weight: 500; }
+            .gm-online-btn {
+                display: inline-block; padding: 4px 12px; margin-left: 10px;
+                background-color: #409EFF; color: #fff; border-radius: 4px;
+                text-decoration: none; font-size: 12px; transition: background 0.3s;
+            }
+            .gm-online-btn:hover { background-color: #66b1ff; color: #fff; text-decoration: none;}
         `;
         document.head.appendChild(style);
     },
@@ -4719,14 +4764,11 @@ const TextbookInfoModule = {
             container = document.createElement('div');
             container.id = 'gm-textbook-container';
             container.className = 'gm-textbook-wrapper';
-
-            // 尝试将其挂载到页面的主内容区底部
             const target = document.querySelector('.main-content') || document.querySelector('#app') || document.body;
             target.appendChild(container);
         }
-
         container.innerHTML = `
-            <div class="gm-textbook-title">本学期课程教材清单</div>
+            <div class="gm-textbook-title">本学期课程教材与网课清单</div>
             <div class="gm-textbook-empty">${msg}</div>
         `;
     },
@@ -4738,7 +4780,7 @@ const TextbookInfoModule = {
 
         if (dataList.length === 0) {
             container.innerHTML = `
-                <div class="gm-textbook-title">本学期课程教材清单</div>
+                <div class="gm-textbook-title">本学期课程教材与网课清单</div>
                 <div class="gm-textbook-empty">本学期的所有课程目前均未在教务系统中登记教材信息。</div>
             `;
             return;
@@ -4748,17 +4790,17 @@ const TextbookInfoModule = {
         const uniqueKeys = new Set();
         const finalData = [];
         dataList.forEach(item => {
-            const key = `${item.courseName}-${item.isbn}-${item.name}`;
+            const key = item.isOnline ? `ONLINE-${item.courseId}` : `${item.courseName}-${item.isbn}-${item.name}`;
             if (!uniqueKeys.has(key)) {
                 uniqueKeys.add(key);
                 finalData.push(item);
             }
         });
 
-        // 按课程名排序，确保同一课程排在一起
+        // 排序
         finalData.sort((a, b) => a.courseName.localeCompare(b.courseName));
 
-        // 统计每门课程有多少本教材，用于 rowspan 合并单元格
+        // 统计 rowspan
         const courseCountMap = {};
         finalData.forEach(item => {
             courseCountMap[item.courseName] = (courseCountMap[item.courseName] || 0) + 1;
@@ -4770,33 +4812,57 @@ const TextbookInfoModule = {
         finalData.forEach(tb => {
             rowsHtml += `<tr>`;
 
-            // 如果是该课程的第一本书，输出带有 rowspan 的课程名单元格
             if (tb.courseName !== currentCourse) {
                 currentCourse = tb.courseName;
                 const courseUrl = `https://jwxt.nwpu.edu.cn/student/for-std/lesson-search/info/${tb.courseId}`;
                 rowsHtml += `<td rowspan="${courseCountMap[currentCourse]}" class="gm-textbook-course">
-                                <a href="${courseUrl}" target="_blank" title="在新标签页中查看课程详情">${tb.courseName}</a>
+                                <a href="${courseUrl}" target="_blank" title="查看课程详情">${tb.courseName}</a>
                              </td>`;
             }
 
-            rowsHtml += `
+            if (tb.isOnline) {
+                // --- 网课特殊行渲染 ---
+                // 1. 匹配平台链接
+                let targetUrl = '';
+                for (const [key, url] of Object.entries(this.PLATFORM_MAP)) {
+                    if (tb.platformName.includes(key)) {
+                        targetUrl = url;
+                        break;
+                    }
+                }
+
+                const platformDisplay = tb.platformName || "在线平台";
+                const linkHtml = targetUrl
+                    ? `<a href="${targetUrl}" target="_blank" class="gm-online-btn">跳转至 ${platformDisplay}</a>`
+                    : `<span style="margin-left:10px; color:#999; font-size:12px;">(暂无跳转链接)</span>`;
+
+                rowsHtml += `
+                    <td colspan="6" class="gm-online-cell">
+                        <span style="margin-right:8px;">☁在线开放课程</span>
+                        <span>平台：${platformDisplay}</span>
+                        ${linkHtml}
+                    </td>
+                </tr>`;
+            } else {
+                // --- 普通教材行渲染 ---
+                rowsHtml += `
                     <td>${tb.name}</td>
                     <td>${tb.author}</td>
                     <td>${tb.publisher}</td>
                     <td>${tb.isbn}</td>
                     <td>${tb.edition}</td>
                     <td>${tb.pubDate}</td>
-                </tr>
-            `;
+                </tr>`;
+            }
         });
 
         container.innerHTML = `
-            <div class="gm-textbook-title">本学期课程教材清单</div>
+            <div class="gm-textbook-title">本学期课程教材与网课清单</div>
             <table class="gm-textbook-table">
                 <thead>
                     <tr>
                         <th width="20%">课程名称</th>
-                        <th width="20%">教材名称</th>
+                        <th width="20%">教材名称 / 平台信息</th>
                         <th width="17%">作者</th>
                         <th width="15%">出版社</th>
                         <th width="10%">ISBN/编号</th>
