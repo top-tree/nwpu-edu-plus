@@ -41,13 +41,34 @@
 
 ## 开发者
 
-```bash
-# 安装依赖
-npm install
+### 环境准备
 
-# 运行测试
-npm test
+```bash
+npm install
 ```
+
+### 常用命令
+
+```bash
+# 语法检查
+node --check main.user.js
+
+# 全量测试
+npm test -- --runInBand
+
+# 覆盖率摘要
+npm test -- --runInBand --coverage --coverageReporters=text-summary
+```
+
+### 测试说明
+
+- `tests/mainUserScript.runtime.test.js`：直接加载 `main.user.js` 的运行时测试
+- 其余 `tests/*.test.js`：用于函数级和页面行为的快速回归测试
+
+### 提交前建议
+
+- 优先只提交与当前任务相关的文件
+- 提交前至少运行一次 `node --check main.user.js` 和 `npm test -- --runInBand`
 
 ## 目录结构
 

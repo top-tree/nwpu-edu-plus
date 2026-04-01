@@ -1,26 +1,28 @@
 // ==UserScript==
 // @name         翱翔教务功能加强(非官方)
 // @namespace    http://tampermonkey.net/
-// @version      1.7.3
+// @version      1.7.6
 // @description  1.提供GPA分析报告；2. 导出课程成绩与教学班排名；3.更好的“学生画像”显示；4.选课助手；5.课程关注与后台同步；6.一键自动评教；7.人员信息检索
-// @author       47
+// @author       leamloli
 // @match        https://jwxt.nwpu.edu.cn/*
 // @match        https://jwxt.nwpu.edu.cn/student/for-std/course-select/some-page*
 // @match        https://ecampus.nwpu.edu.cn/*
+// @match        https://teacher.nwpu.edu.cn/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @grant        unsafeWindow
 // @connect      electronic-signature.nwpu.edu.cn
+// @connect      update.greasyfork.org
+// @connect      api.codetabs.com
+// @connect      api.allorigins.win
 // @license      MIT
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=nwpu.edu.cn
 // @run-at       document-start
 // @require      https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js
 // @require      https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js
 // @homepage     https://greasyfork.org/zh-CN/scripts/524099-%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA
-// @downloadURL https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.user.js
-// @updateURL https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.meta.js
 // ==/UserScript==
 
 // ==================== 用户可配置区域 ====================
@@ -41,7 +43,7 @@ const GRADE_MAPPING_CONFIG = {
     'use strict';
 
 // =============== 0.0 拦截浏览器的异常请求，优化网页加载速度 ===============
-    try {
+try {
         const BAD_KEY = 'burp';
 
         // 1. 劫持 HTMLImageElement 原型链上的 src 属性
@@ -78,7 +80,6 @@ const GRADE_MAPPING_CONFIG = {
     } catch (e) {
         console.error('[NWPU-Enhanced] 拦截器初始化异常', e);
     }
-
 
 // =-=-=-=-=-=-=-=-=-=-=-=-= 0. 基础工具与日志系统 =-=-=-=-=-=-=-=-=-=-=-=-=
 
@@ -278,6 +279,272 @@ const ConfigManager = {
 
     get enableCourseWatch() { return GM_getValue('enableCourseWatch', true); },
     set enableCourseWatch(val) { GM_setValue('enableCourseWatch', val); }
+};
+
+// --- 常用链接导航 ---
+const FriendlyLinks = {
+    categories: [
+        {
+            title: "友情链接快捷访问",
+            titleIcon: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="#409EFF" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>',
+            links: [
+                { name: "湖畔资料", url: "http://nwpushare.fun", desc: "西工大课程资料共享平台", bg: "#ecf5ff", color: "#409EFF", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>' },
+                { name: "瓜兵速成指南", url: "https://nwpumanual.angine.tech/", desc: "新生入学问题指南", bg: "#fdf6ec", color: "#E6A23C", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>' }
+
+            ]
+        },
+        {
+            title: "校内网站快捷访问",
+            titleIcon: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="#67C23A" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>',
+            links: [
+                { name: "西北工业大学 WebVPN", url: "https://webvpn.nwpu.edu.cn/", desc: "校外免客户端访问校园网环境", bg: "#f0f9eb", color: "#67C23A", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>' },
+                { name: "NOJ", url: "https://noj.nwpu.edu.cn/cpbox/", desc: "程序设计基础理论/实验 NOJ平台", bg: "#ecf5ff", color: "#409EFF", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>' }
+            ]
+        },
+        {
+            title: "网课网站快速访问",
+            titleIcon: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="#F56C6C" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>',
+            links: [
+                { name: "学堂在线", url: "https://bknwpu.yuketang.cn/", desc: "西工大专属雨课堂在线学习主页", bg: "#fef0f0", color: "#F56C6C", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path></svg>' },
+                { name: "中国大学 MOOC 学校云", url: "https://www.icourse163.org/spoc/schoolcloud/index.htm", desc: "国家精品课程与SPOC在线学习平台", bg: "#f0f9eb", color: "#67C23A", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' },
+                { name: "超星学习通", url: "http://nwpu.mooc.chaoxing.com", desc: "西工大超星泛雅网络教学平台", bg: "#ecf5ff", color: "#409EFF", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>' },
+                { name: "智慧树 / 知到", url: "https://www.zhihuishu.com/", desc: "国内大型学分课跨校共享平台", bg: "#fdf6ec", color: "#E6A23C", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"></path><path d="M9 7V2h6v5"></path><path d="M5 12h14v-5H5v5z"></path></svg>' }
+            ]
+        }
+    ],
+
+    initModal: function() {
+        if (document.getElementById('gm-friendly-links-modal')) return;
+
+        const style = document.createElement('style');
+        style.textContent = `
+            .gm-fl-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.55); backdrop-filter: blur(4px); z-index: 100005; display: flex; justify-content: center; align-items: center; animation: gmLinkFadeIn 0.2s ease-out; }
+            @keyframes gmLinkFadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+            .gm-fl-modal { background: #f5f7fa; border-radius: 12px; width: 720px; max-width: 92%; box-shadow: 0 12px 32px rgba(0,0,0,0.25); overflow: hidden; display: flex; flex-direction: column; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            .gm-fl-header { padding: 18px 24px; border-bottom: 1px solid #ebeef5; display: flex; justify-content: space-between; align-items: center; background: #fff; color: #303133; }
+            .gm-fl-title { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+            .gm-fl-close { cursor: pointer; color: #909399; font-size: 26px; line-height: 1; user-select: none; transition: color 0.2s; }
+            .gm-fl-close:hover { color: #f56c6c; }
+            .gm-fl-body { padding: 24px; max-height: 65vh; overflow-y: auto; }
+            .gm-fl-category { margin-bottom: 24px; }
+            .gm-fl-cat-title { font-size: 15px; font-weight: bold; color: #606266; margin-bottom: 14px; display:flex; align-items:center; gap:8px;}
+            .gm-fl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+            .gm-fl-card { background: #fff; border: 1px solid #e4e7ed; border-radius: 8px; padding: 14px; text-decoration: none; display: flex; align-items: center; gap: 14px; transition: all 0.25s; cursor: pointer; }
+            .gm-fl-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); border-color: #c6e2ff; }
+            .gm-fl-icon-box { width: 36px; height: 36px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+            .gm-fl-icon-box svg { width: 20px; height: 20px; }
+            .gm-fl-info { flex: 1; min-width: 0; }
+            .gm-fl-name { font-size: 14px; font-weight: 600; color: #303133; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }
+            .gm-fl-arrow { font-size: 12px; color: #c0c4cc; transition: transform 0.2s, color 0.2s; font-weight: bold; }
+            .gm-fl-card:hover .gm-fl-arrow { transform: translateX(3px); color: #409EFF; }
+            .gm-fl-desc { font-size: 12px; color: #909399; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        `;
+        document.head.appendChild(style);
+
+        const overlay = document.createElement('div');
+        overlay.id = 'gm-friendly-links-modal';
+        overlay.className = 'gm-fl-modal-overlay';
+        overlay.style.display = 'none';
+
+        let contentHtml = this.categories.map(cat => `
+            <div class="gm-fl-category">
+                <div class="gm-fl-cat-title">${cat.titleIcon} ${cat.title}</div>
+                <div class="gm-fl-grid">
+                    ${cat.links.map(link => `
+                        <a href="${link.url}" target="_blank" class="gm-fl-card">
+                            <div class="gm-fl-icon-box" style="background:${link.bg}; color:${link.color};">${link.svg}</div>
+                            <div class="gm-fl-info">
+                                <div class="gm-fl-name">${link.name} <span class="gm-fl-arrow">➔</span></div>
+                                <div class="gm-fl-desc" title="${link.desc}">${link.desc}</div>
+                            </div>
+                        </a>
+                    `).join('')}
+                </div>
+            </div>
+        `).join('');
+
+        overlay.innerHTML = `
+            <div class="gm-fl-modal" onclick="event.stopPropagation()">
+                <div class="gm-fl-header">
+                    <div class="gm-fl-title">
+                        <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+                        常用链接访问
+                    </div>
+                    <span class="gm-fl-close" onclick="document.getElementById('gm-friendly-links-modal').style.display='none'">&times;</span>
+                </div>
+                <div class="gm-fl-body">${contentHtml}</div>
+            </div>
+        `;
+        overlay.onclick = () => overlay.style.display = 'none';
+        document.body.appendChild(overlay);
+    },
+    show: function() { this.initModal(); document.getElementById('gm-friendly-links-modal').style.display = 'flex'; }
+};
+
+// --- 版本检查器 ---
+const UpdateChecker = {
+    check: function(auto = false) {
+        const btnText = document.getElementById('gm-update-text');
+        if (!auto && btnText) btnText.innerHTML = "正在检查更新...";
+
+        const metaUrl = 'https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.meta.js?t=' + Date.now();
+        const urlsToTry = [
+            metaUrl,
+            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(metaUrl)}`,
+            `https://api.allorigins.win/raw?url=${encodeURIComponent(metaUrl)}`
+        ];
+
+        let currentTry = 0;
+        const requestNext = () => {
+            if (currentTry >= urlsToTry.length) {
+                if (!auto && btnText) btnText.innerHTML = `网络受限，点击重试`;
+                return;
+            }
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: urlsToTry[currentTry],
+                timeout: 3500,
+                onload: function(res) {
+                    if (res.status === 200 && res.responseText.includes('@version')) {
+                        try {
+                            const match = res.responseText.match(/@version\s+([^\s]+)/);
+                            if (match && match[1]) {
+                                const latestVersion = match[1];
+                                const currentVersion = typeof GM_info !== 'undefined' ? GM_info.script.version : '1.0.0';
+
+                                if (UpdateChecker.compareVersion(latestVersion, currentVersion) > 0) {
+                                    if (btnText) btnText.innerHTML = `<span style="color:#F56C6C;font-weight:bold;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:4px;"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>发现新版本 v${latestVersion}</span>`;
+                                    const badge = document.querySelector('.gm-float-ball .gm-badge');
+                                    if (badge) badge.style.display = 'block';
+                                } else {
+                                    if (!auto && btnText) btnText.innerHTML = `已是最新版本 (v${currentVersion})`;
+                                    else if (auto && btnText) btnText.innerHTML = `检查版本更新 (v${currentVersion})`;
+                                }
+                                return;
+                            }
+                        } catch(e) {}
+                    }
+                    currentTry++; requestNext();
+                },
+                onerror: function() { currentTry++; requestNext(); },
+                ontimeout: function() { currentTry++; requestNext(); }
+            });
+        };
+        requestNext();
+    },
+    compareVersion: function(v1, v2) {
+        const p1 = v1.split('.').map(Number), p2 = v2.split('.').map(Number);
+        for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+            if ((p1[i] || 0) > (p2[i] || 0)) return 1;
+            if ((p1[i] || 0) < (p2[i] || 0)) return -1;
+        }
+        return 0;
+    },
+    openUpdatePage: function() {
+        if (document.getElementById('gm-update-modal-overlay')) return;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'gm-update-modal-overlay';
+        overlay.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:999999; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(3px); animation: gmFadeIn 0.2s;';
+
+        const modal = document.createElement('div');
+        modal.style.cssText = 'background:#fff; width:440px; padding:24px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,0.2); font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align:center; position:relative;';
+
+        modal.innerHTML = `
+            <h3 style="margin:0 0 15px 0; color:#303133; font-size:18px; display:flex; align-items:center; justify-content:center; gap:8px;">
+                <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                脚本更新指引
+            </h3>
+            <p style="color:#606266; font-size:14px; margin-bottom:20px; line-height:1.6; text-align:left;">
+                由于更新源在国内访问受限，直接点击更新可能失败。<br>推荐使用<b>国内直连下载</b>，手动完成更新：
+            </p>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+                <button id="gm-update-btn-proxy" style="background:#409EFF; color:#fff; border:none; padding:12px; border-radius:6px; font-size:14px; cursor:pointer; font-weight:bold; transition:all 0.2s; display:flex; align-items:center; justify-content:center; gap:6px;">
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    下载最新版代码
+                </button>
+                <div id="gm-update-tip" style="font-size:13px; color:#E6A23C; display:none; text-align:left; background:#fdf6ec; padding:10px; border-radius:6px; border:1px solid #faecd8; line-height:1.5;">
+                    <div style="display:flex; align-items:center; margin-bottom:4px; font-weight:bold; color:#67C23A;">
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="#67C23A" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>代码下载成功！
+                    </div>
+                    请在浏览器的下载列表中找到刚刚下载的<b>“翱翔教务功能加强.user.js”</b>，将其<b>直接拖拽到当前浏览器网页中</b>释放鼠标，即可弹出更新界面！
+                </div>
+
+                <div style="display:flex; gap:10px; margin-top:5px;">
+                    <button id="gm-update-btn-direct" style="flex:1; background:#f4f4f5; color:#606266; border:1px solid #dcdfe6; padding:10px; border-radius:6px; font-size:13px; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; justify-content:center; gap:6px;">
+                        <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                        尝试访问greasyfork
+                    </button>
+                    <button id="gm-update-btn-close" style="flex:1; background:#fff; color:#909399; border:1px solid #e4e7ed; padding:10px; border-radius:6px; font-size:13px; cursor:pointer; transition:all 0.2s;">
+                        稍后更新
+                    </button>
+                </div>
+            </div>
+        `;
+
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+
+        document.getElementById('gm-update-btn-close').onclick = () => overlay.remove();
+        document.getElementById('gm-update-btn-direct').onclick = () => {
+            window.open('https://greasyfork.org/zh-CN/scripts/524099', '_blank');
+            overlay.remove();
+        };
+
+        const proxyBtn = document.getElementById('gm-update-btn-proxy');
+        const tipBox = document.getElementById('gm-update-tip');
+
+        proxyBtn.onclick = () => {
+            proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="gm-spin" style="margin-right:6px;"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>正在拉取代码，请稍候...';
+
+            // 补充一个简单的动画让等待按钮转起来
+            if(!document.getElementById('gm-spin-style')){
+                const style = document.createElement('style');
+                style.id = 'gm-spin-style';
+                style.textContent = '@keyframes gmSpin { 100% { transform: rotate(360deg); } } .gm-spin { animation: gmSpin 1s linear infinite; }';
+                document.head.appendChild(style);
+            }
+
+            proxyBtn.disabled = true;
+            proxyBtn.style.opacity = '0.7';
+
+            const scriptUrl = 'https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.user.js';
+            const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(scriptUrl)}`;
+
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: proxyUrl,
+                onload: (res) => {
+                    if (res.status === 200 && res.responseText.includes('==/UserScript==')) {
+                        const blob = new Blob([res.responseText], { type: 'text/javascript' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = '翱翔教务功能加强.user.js';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+
+                        proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>下载完成！请按下方提示操作';
+                        proxyBtn.style.background = "#67C23A";
+                        tipBox.style.display = "block";
+                    } else {
+                        proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>拉取失败，请重试或尝试原网页';
+                        proxyBtn.style.background = "#F56C6C";
+                        proxyBtn.disabled = false;
+                        proxyBtn.style.opacity = '1';
+                    }
+                },
+                onerror: () => {
+                    proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>网络错误，请重试';
+                    proxyBtn.style.background = "#F56C6C";
+                    proxyBtn.disabled = false;
+                    proxyBtn.style.opacity = '1';
+                }
+            });
+        };
+    }
 };
 
 // --- 关注课程数据管理 ---
@@ -509,7 +776,6 @@ async function fetchAllDataAndCache(retryCount = 0) {
     }
 }
 
-
 /**
  * 检查是否有新成绩发布
  * @param {Array} newGrades 本次抓取到的所有成绩数组
@@ -655,11 +921,7 @@ function showGradeNotification(courses) {
 
     document.body.appendChild(banner);
 }
-
-
-
 // =-=-=-=-=-=-=-=-=-=-=-=-= 1. 主页初始化与诊断 =-=-=-=-=-=-=-=-=-=-=-=-=
-
 /**
  * 打印脚本初始化时的详细存储状态诊断报告
  */
@@ -750,9 +1012,14 @@ function printStorageDiagnosis() {
 }
 
 async function initializeHomePageFeatures() {
+    const isEcampus = location.host === 'ecampus.nwpu.edu.cn';
+
     // 1. UI 初始化
-    printStorageDiagnosis();
-    createFloatingMenu();
+    if (!isEcampus) printStorageDiagnosis();
+    createFloatingMenu(isEcampus); // 传入当前环境标志
+
+    if (isEcampus) return;
+
     initExportUI();
     initScheduleWidget();
 
@@ -785,12 +1052,10 @@ async function initializeHomePageFeatures() {
 
     // 4. 使用 requestIdleCallback 在浏览器空闲时执行
     if ('requestIdleCallback' in window) {
-        // timeout: 3000 表示：如果浏览器一直很忙，最晚 3秒后强制执行，防止任务饿死
         window.requestIdleCallback(() => {
             runHeavyDataFetch();
         }, { timeout: 3000 });
     } else {
-        // 兼容不支持该 API 的浏览器
         setTimeout(runHeavyDataFetch, 1000);
     }
 
@@ -805,7 +1070,7 @@ async function initializeHomePageFeatures() {
     }
 }
 
-function createFloatingMenu() {
+function createFloatingMenu(isEcampus = false) {
     if (!document.getElementById('gm-float-menu-style')) {
         const style = document.createElement('style');
         style.id = 'gm-float-menu-style';
@@ -813,12 +1078,12 @@ function createFloatingMenu() {
             /* 悬浮球样式 */
             .gm-float-ball {
                 position: fixed; top: 15%; right: 20px; width: 48px; height: 48px;
-                background-color: #007bff; color: white; border-radius: 50%;
+                background-color: #409EFF; color: white; border-radius: 50%;
                 box-shadow: 0 4px 12px rgba(0,123,255,0.4); z-index: 100001; cursor: pointer;
                 display: flex; align-items: center; justify-content: center; font-size: 26px;
                 user-select: none; transition: all 0.2s; touch-action: none;
             }
-            .gm-float-ball:hover { transform: scale(1.08); background-color: #0056b3; }
+            .gm-float-ball:hover { transform: scale(1.08); background-color: #66b1ff; }
 
             /* 菜单容器 */
             .gm-float-menu {
@@ -835,24 +1100,25 @@ function createFloatingMenu() {
             .gm-float-menu::-webkit-scrollbar { width: 5px; }
             .gm-float-menu::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 3px; }
 
-            /* 分组标题 */
+           /* 分组标题 */
             .gm-menu-group-title {
-                font-size: 12px; color: #909399; padding: 10px 18px 4px;
-                margin-top: 4px; border-top: 1px solid #f0f2f5;
-                font-weight: bold; pointer-events: none; letter-spacing: 1px;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+                font-size: 12px !important; color: #909399 !important; padding: 10px 18px 4px !important;
+                margin-top: 4px !important; border-top: 1px solid #f0f2f5 !important;
+                font-weight: bold !important; pointer-events: none !important; letter-spacing: 1px !important;
             }
-            .gm-menu-group-title:first-child { margin-top: 0; border-top: none; padding-top: 6px; }
+            .gm-menu-group-title:first-child { margin-top: 0 !important; border-top: none !important; padding-top: 6px !important; }
 
             /* 菜单项 */
             .gm-menu-item {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
                 padding: 10px 18px !important;
-                cursor: pointer; color: #444; font-size: 14px; text-align: left;
+                cursor: pointer !important; color: #444 !important; font-size: 14px !important; text-align: left !important;
                 background: transparent !important; border: none !important;
                 border-radius: 0 !important; width: 100% !important; margin: 0 !important;
-                transition: background 0.15s, color 0.15s;
-                display: flex; align-items: center; gap: 10px;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                box-sizing: border-box !important; line-height: 1.5 !important;
+                transition: background 0.15s, color 0.15s !important;
+                display: flex !important; align-items: center !important; gap: 10px !important;
+                box-sizing: border-box !important; line-height: 1.5 !important; font-weight: normal !important;
             }
             .gm-menu-item:hover:not(:disabled) { background-color: #f0f7ff !important; color: #007bff !important; }
             .gm-menu-item:disabled { cursor: not-allowed; color: #c0c4cc !important; }
@@ -875,94 +1141,111 @@ function createFloatingMenu() {
 
     const mainView = document.createElement('div');
     mainView.className = 'gm-view-main';
-    mainView.innerHTML = `
-        <div class="gm-menu-group-title">成绩与学业分析</div>
-        <button class="gm-menu-item" id="gm-btn-gpa" disabled><span class="gm-icon">∑</span> GPA综合分析</button>
-        <button class="gm-menu-item" id="gm-btn-gpa-estimate" disabled><span class="gm-icon">📊</span> GPA预测</button>
-        <button class="gm-menu-item" id="gm-btn-export" disabled><span class="gm-icon">⇩</span> 导出成绩与排名</button>
+    // 根据环境注入不同的 DOM
+    if (isEcampus) {
+        mainView.innerHTML = `
+            <div class="gm-menu-group-title">快捷工具</div>
+            <button class="gm-menu-item" id="gm-btn-person-search"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span> 人员信息检索</button>
+            <button class="gm-menu-item" id="gm-btn-links"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> 常用链接访问</button>
 
-        <div class="gm-menu-group-title">选课助手</div>
-        <button class="gm-menu-item" id="gm-btn-follow"><span class="gm-icon">❤</span> 课程关注列表</button>
-        <button class="gm-menu-item" id="gm-btn-sync-course"><span class="gm-icon">↻</span> 同步最新选课学期数据</button>
+            <div class="gm-menu-group-title">系统设置</div>
+            <button class="gm-menu-item" id="gm-btn-update"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><polyline points="23 20 23 14 17 14"></polyline><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path></svg></span> <span id="gm-update-text">检查版本更新</span></button>
+        `;
+    } else {
+        mainView.innerHTML = `
+            <div class="gm-menu-group-title">成绩与学业分析</div>
+            <button class="gm-menu-item" id="gm-btn-gpa" disabled><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg></span> GPA综合分析</button>
+            <button class="gm-menu-item" id="gm-btn-gpa-estimate" disabled><span class="gm-icon">📊</span> GPA预测</button>
+            <button class="gm-menu-item" id="gm-btn-export" disabled><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></span> 导出成绩与排名</button>
 
-        <div class="gm-menu-group-title">快捷工具</div>
-        <button class="gm-menu-item" id="gm-btn-eval-jump"><span class="gm-icon">✎</span> 一键自动评教</button>
-        <button class="gm-menu-item" id="gm-btn-person-search"><span class="gm-icon">搜</span> 人员信息检索</button>
-        <button class="gm-menu-item" id="gm-btn-hupan"><span class="gm-icon">➜</span> 跳转至湖畔资料</button>
+            <div class="gm-menu-group-title">选课助手</div>
+            <button class="gm-menu-item" id="gm-btn-follow"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg></span> 课程关注列表</button>
+            <button class="gm-menu-item" id="gm-btn-sync-course"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l2-2 4 4 2-2h4"></path></svg></span> 同步最新选课数据</button>
 
-        <div class="gm-menu-group-title">偏好设置</div>
-        <button class="gm-menu-item" id="gm-chk-portrait-btn"><span class="gm-icon" id="icon-portrait"></span> 启用学生画像增强</button>
-        <button class="gm-menu-item" id="gm-chk-watch-btn"><span class="gm-icon" id="icon-watch"></span> 启用选课辅助功能</button>
-        <button class="gm-menu-item" id="gm-btn-help"><span class="gm-icon">◆</span> 脚本使用说明</button>
-    `;
+            <div class="gm-menu-group-title">快捷工具</div>
+            <button class="gm-menu-item" id="gm-btn-eval-jump"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="14 2 18 6 7 17 3 17 3 13 14 2"></polygon><line x1="3" y1="22" x2="21" y2="22"></line></svg></span> 一键自动评教</button>
+            <button class="gm-menu-item" id="gm-btn-person-search"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span> 人员信息检索</button>
+            <button class="gm-menu-item" id="gm-btn-links"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> 常用链接访问</button>
+
+            <div class="gm-menu-group-title">偏好与系统设置</div>
+            <button class="gm-menu-item" id="gm-chk-portrait-btn"><span class="gm-icon" id="icon-portrait"></span> 启用学生画像增强</button>
+            <button class="gm-menu-item" id="gm-chk-watch-btn"><span class="gm-icon" id="icon-watch"></span> 启用选课辅助功能</button>
+            <button class="gm-menu-item" id="gm-btn-help"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></span> 脚本使用说明</button>
+            <button class="gm-menu-item" id="gm-btn-update"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><polyline points="23 20 23 14 17 14"></polyline><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path></svg></span> <span id="gm-update-text">检查版本更新</span></button>
+        `;
+    }
 
     floatMenu.appendChild(mainView);
     document.body.appendChild(floatMenu);
 
-    menuExportBtn = document.getElementById('gm-btn-export');
-    menuGpaBtn = document.getElementById('gm-btn-gpa');
-    menuSyncBtn = document.getElementById('gm-btn-sync-course');
-    menuFollowBtn = document.getElementById('gm-btn-follow');
-    menuHupanBtn = document.getElementById('gm-btn-hupan');
-    const menuHelpBtn = document.getElementById('gm-btn-help');
-
-    document.addEventListener('click', (e) => { if (!floatMenu.contains(e.target) && !floatBall.contains(e.target)) hideMenu(); });
-
-    menuExportBtn.onclick = handleExportClick;
-    menuGpaBtn.onclick = handleGpaClick;
-    menuSyncBtn.onclick = handleSyncCourseClick;
-    menuFollowBtn.onclick = handleShowFollowedClick;
-    menuHelpBtn.onclick = () => handleHelpClick();
-    
-    const gpaEstimateBtn = document.getElementById('gm-btn-gpa-estimate');
-    if (gpaEstimateBtn) {
-        gpaEstimateBtn.addEventListener('click', () => {
-            hideMenu();
-            // 立即显示弹窗，不要等待数据加载
-            handleGpaEstimateClickImmediate();
-        });
+    const linksBtn = document.getElementById('gm-btn-links');
+    if (linksBtn) {
+        linksBtn.onclick = () => {
+            hideMenu(); // 先隐藏悬浮球菜单
+            FriendlyLinks.show(); // 弹出友情链接弹窗
+        };
     }
 
-    menuHupanBtn.onclick = () => {
-        hideMenu();
-        if(confirm("即将跳转至湖畔资料网站，请在校园网环境下访问，是否继续？")) {
-             window.open('http://nwpushare.fun', '_blank');
+    const personSearchBtn = document.getElementById('gm-btn-person-search');
+    if (personSearchBtn) {
+        personSearchBtn.onclick = () => {
+            hideMenu();
+            PersonnelSearch.openModal();
+        };
+    }
+
+    // 绑定教务系统专属事件
+    if (!isEcampus) {
+        menuExportBtn = document.getElementById('gm-btn-export');
+        menuGpaBtn = document.getElementById('gm-btn-gpa');
+        menuSyncBtn = document.getElementById('gm-btn-sync-course');
+        menuFollowBtn = document.getElementById('gm-btn-follow');
+        const menuHelpBtn = document.getElementById('gm-btn-help');
+        const gpaEstimateBtn = document.getElementById('gm-btn-gpa-estimate');
+
+        menuExportBtn.onclick = handleExportClick;
+        menuGpaBtn.onclick = handleGpaClick;
+        menuSyncBtn.onclick = handleSyncCourseClick;
+        menuFollowBtn.onclick = handleShowFollowedClick;
+        menuHelpBtn.onclick = () => handleHelpClick();
+        document.getElementById('gm-btn-eval-jump').onclick = handleJumpToEvaluation;
+        if (gpaEstimateBtn) {
+            gpaEstimateBtn.onclick = () => {
+                hideMenu();
+                handleGpaEstimateClickImmediate();
+            };
         }
-    };
 
-    document.getElementById('gm-btn-person-search').onclick = () => {
-       hideMenu();
-       PersonnelSearch.openModal();
-    };
+        const updateToggleUI = () => {
+            const isPortrait = ConfigManager.enablePortraitEnhancement;
+            const isWatch = ConfigManager.enableCourseWatch;
+            document.getElementById('icon-portrait').textContent = isPortrait ? '☑' : '☐';
+            document.getElementById('icon-watch').textContent = isWatch ? '☑' : '☐';
 
-    const updateToggleUI = () => {
-        const isPortrait = ConfigManager.enablePortraitEnhancement;
-        const isWatch = ConfigManager.enableCourseWatch;
-        document.getElementById('icon-portrait').textContent = isPortrait ? '☑' : '☐';
-        document.getElementById('icon-watch').textContent = isWatch ? '☑' : '☐';
+            document.getElementById('gm-chk-portrait-btn').style.color = isPortrait ? '#333' : '#999';
+            document.getElementById('gm-chk-watch-btn').style.color = isWatch ? '#333' : '#999';
+        };
 
-        document.getElementById('gm-chk-portrait-btn').style.color = isPortrait ? '#333' : '#999';
-        document.getElementById('gm-chk-watch-btn').style.color = isWatch ? '#333' : '#999';
-    };
+        document.getElementById('gm-chk-portrait-btn').onclick = () => {
+            ConfigManager.enablePortraitEnhancement = !ConfigManager.enablePortraitEnhancement;
+            updateToggleUI();
+            if(window.location.href.includes('student-portrait')) {
+                if(confirm("修改画像增强设置需要刷新页面生效，是否刷新？")) window.location.reload();
+            }
+        };
 
-    document.getElementById('gm-chk-portrait-btn').onclick = () => {
-        ConfigManager.enablePortraitEnhancement = !ConfigManager.enablePortraitEnhancement;
+        document.getElementById('gm-chk-watch-btn').onclick = () => {
+            ConfigManager.enableCourseWatch = !ConfigManager.enableCourseWatch;
+            updateToggleUI();
+            if(window.location.href.includes('lesson-search')) {
+                alert("课程关注设置已更新，将在下次进入页面或翻页时生效。");
+            }
+        };
         updateToggleUI();
-        if(window.location.href.includes('student-portrait')) {
-            if(confirm("修改画像增强设置需要刷新页面生效，是否刷新？")) window.location.reload();
-        }
-    };
+    }
 
-    document.getElementById('gm-chk-watch-btn').onclick = () => {
-        ConfigManager.enableCourseWatch = !ConfigManager.enableCourseWatch;
-        updateToggleUI();
-        if(window.location.href.includes('lesson-search')) {
-            alert("课程关注设置已更新，将在下次进入页面或翻页时生效。");
-        }
-    };
-    document.getElementById('gm-btn-eval-jump').onclick = handleJumpToEvaluation;
-
-    updateToggleUI();
+    // 处理悬浮球全局事件 (防点击空白处、拖拽等)
+    document.addEventListener('click', (e) => { if (!floatMenu.contains(e.target) && !floatBall.contains(e.target)) hideMenu(); });
 
     let isDragging = false, hasMoved = false, startX, startY, initialLeft, initialTop;
     floatBall.addEventListener('mousedown', (e) => {
@@ -993,6 +1276,18 @@ function createFloatingMenu() {
             showMenu();
         }
     });
+
+    // 绑定更新按钮点击事件
+    document.getElementById('gm-btn-update').onclick = () => {
+        const btnText = document.getElementById('gm-update-text').innerText;
+        if (btnText.includes('发现新版本')) {
+            UpdateChecker.openUpdatePage();
+        } else {
+            UpdateChecker.check(false);
+        }
+    };
+    // 首次加载自动静默检查更新
+    UpdateChecker.check(true);
 }
 
 function showMenu() { floatMenu.style.display = 'flex'; floatMenu.offsetHeight; floatMenu.classList.add('show'); }
@@ -1101,7 +1396,7 @@ function handleHelpClick() {
             .gm-help-overlay {
                 position: fixed; top: 0; left: 0; width: 100%; height: 100%;
                 background-color: rgba(0, 0, 0, 0.6);
-                z-index: 20000; /* 确保在最上层 */
+                z-index: 20000;
                 display: flex; align-items: center; justify-content: center;
                 backdrop-filter: blur(3px);
                 animation: gmFadeIn 0.2s ease-out;
@@ -1232,7 +1527,6 @@ function handleHelpClick() {
                     <b>人员检索：</b>悬浮球菜单点击 <span class="gm-tag gm-tag-gray">人员信息检索</span>，输入姓名/学号/工号可查询具体信息。
                 </div>
                 <div class="gm-help-step">
-                    <b>跳转至湖畔资料：</b>悬浮球菜单点击 <span class="gm-tag gm-tag-gray">➜跳转至湖畔资料</span>，可在校园网环境下访问湖畔资料网站。
                 </div>
                 <div class="gm-help-step">
                     <b>学生画像增强：</b>进入“学生画像”页面，脚本会自动修正顶部卡片的平均分算法，并优化底部“计划外课程”的表格显示（增加教学班排名）。
@@ -1518,16 +1812,16 @@ function handleShowFollowedClick() {
         }
     };
 
-    // 模块 3: CSS 样式注入 - 保持不变
+    // 模块 3: CSS 样式注入
     const styleId = 'gm-followed-modal-style';
     if (!document.getElementById(styleId)) {
         const style = document.createElement('style');
         style.id = styleId;
         style.textContent = `
             .gm-modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 10005; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
-            .gm-modal-content { background-color: #fff; border-radius: 6px; width: 95%; max-width: 1200px; height: 90vh; max-height: 950px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; overflow: hidden; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; animation: gmFadeIn 0.2s ease-out; }
+            .gm-modal-content { background-color: #fff; border-radius: 12px; width: 95%; max-width: 1200px; height: 90vh; max-height: 950px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; overflow: hidden; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; animation: gmFadeIn 0.2s ease-out; }
             @keyframes gmFadeIn { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: scale(1); } }
-            .gm-modal-header { padding: 0 20px; border-bottom: 1px solid #eee; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; height: 50px; }
+            .gm-modal-header { padding: 0 20px; border-bottom: 1px solid #eee; background: #fff; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; height: 50px; }
             .gm-modal-title { font-size: 16px; font-weight: bold; color: #333; display: flex; align-items: center; gap: 8px; }
             .gm-modal-close { border: none; background: none; font-size: 24px; color: #999; cursor: pointer; padding: 0 10px; display:flex; align-items:center; }
             .gm-tabs { display: flex; gap: 20px; margin-left: 30px; height: 100%; }
@@ -1934,78 +2228,230 @@ function calculateAndDisplayGPA(data) {
 }
 
 function showGpaReportModal(reportData, allGrades) {
-    const existingOverlay = document.querySelector('.gpa-report-overlay'); if (existingOverlay) existingOverlay.remove();
+    const existingOverlay = document.querySelector('.gpa-report-overlay');
+    if (existingOverlay) existingOverlay.remove();
     const styleId = 'gpa-report-modal-styles';
     if (!document.getElementById(styleId)) {
-        const style = document.createElement("style"); style.id = styleId;
+        const style = document.createElement("style");
+        style.id = styleId;
         style.textContent = `
-            .gpa-report-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 10005; display: flex; align-items: center; justify-content: center; }
-            .gpa-report-modal { background-color: #fff; border-radius: 8px; padding: 25px; width: 90%; max-width: 700px; box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; max-height: 85vh; overflow-y: auto; position: relative; }
-            .gpa-report-modal h2 { margin-top: 0; font-size: 22px; color: #333; border-bottom: 1px solid #eee; padding-bottom: 15px; }
-            .gpa-report-modal h3 { margin-top: 20px; font-size: 18px; color: #007bff; margin-bottom: 10px; border-left: 4px solid #007bff; padding-left: 8px; }
-            .gpa-report-modal p, .gpa-report-modal li { font-size: 15px; line-height: 1.8; color: #000 !important; }
-            .gpa-report-modal strong { color: #000; }
-            .gpa-report-modal .close-btn { position: absolute; top: 15px; right: 20px; font-size: 28px; color: #aaa; background: none; border: none; cursor: pointer; line-height: 1; padding: 0; }
-            .gpa-report-modal .close-btn:hover { color: #000; }
-            .gpa-report-modal .disclaimer { font-size: 12px; color: #999; margin-top: 20px; border-top: 1px solid #eee; padding-top: 10px; }
-            .gpa-report-modal ul { padding-left: 20px; margin: 10px 0; }
-            .gpa-report-modal .prediction-module { padding-top: 15px; }
-            .gpa-report-modal .input-group { display: flex; align-items: center; margin-bottom: 10px; }
-            .gpa-report-modal .input-group label { width: 180px; font-size: 14px; flex-shrink: 0; }
-            .gpa-report-modal .input-group input { flex-grow: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;}
-            .gpa-report-modal .calculate-btn { width: 100%; padding: 10px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 15px; margin-top: 5px; }
-            .gpa-report-modal .calculate-btn:hover { background-color: #218838; }
-            .gpa-report-modal .prediction-result { margin-top: 12px; font-weight: bold; text-align: center; font-size: 16px; min-height: 24px; }
-            .gpa-report-modal details { border: 1px solid #eee; border-radius: 4px; margin-top: 20px; background-color: #f9f9f9; }
-            .gpa-report-modal summary { padding: 12px 15px; font-weight: bold; font-size: 18px; color: #555; cursor: pointer; list-style: none; position: relative; outline: none; }
-            .gpa-report-modal details.stuck-analysis-section > summary { color: #555; }
+            .gpa-report-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.55); backdrop-filter: blur(4px); z-index: 10005; display: flex; align-items: center; justify-content: center; animation: gmFadeIn 0.2s ease-out; }
+            .gpa-report-modal { background-color: #f5f7fa; border-radius: 12px; width: 880px; max-width: 95%; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; max-height: 85vh; overflow: hidden; }
+            .gpa-modal-header { padding: 18px 24px; border-bottom: 1px solid #ebeef5; display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 12px 12px 0 0; }
+            .gpa-modal-title { font-size: 18px; font-weight: 600; color: #303133; display: flex; align-items: center; gap: 8px;}
+            .gpa-close-btn { border: none; background: transparent; font-size: 26px; color: #909399; cursor: pointer; line-height: 1; transition: color 0.2s; padding: 0; }
+            .gpa-close-btn:hover { color: #f56c6c; }
+            .gpa-modal-body { padding: 24px; overflow-y: auto; background-color: #f5f7fa; }
+            .gpa-modal-body::-webkit-scrollbar { width: 6px; }
+            .gpa-modal-body::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 3px; }
+
+            .gpa-modal-grid { display: flex; gap: 20px; align-items: flex-start; }
+            .gpa-column-left { flex: 5.5; display: flex; flex-direction: column; gap: 16px; }
+            .gpa-column-right { flex: 4.5; display: flex; flex-direction: column; gap: 16px; }
+
+            .current-gpa-module { background: #fff; border: 1px solid #ebeef5; border-radius: 8px; padding: 20px; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.02); }
+            .gpa-report-modal h3 { margin: 0 0 15px 0; font-size: 16px; color: #303133; display: flex; align-items: center; }
+            .gpa-report-modal h3::before { content: ''; display: inline-block; width: 4px; height: 16px; background: #409EFF; margin-right: 8px; border-radius: 2px; }
+            .gpa-report-modal p, .gpa-report-modal li { font-size: 14px; line-height: 1.8; color: #606266 !important; margin-bottom: 0;}
+            .gpa-report-modal strong { color: #303133; font-weight: 600; }
+
+            .gpa-report-modal details { border: 1px solid #ebeef5; border-radius: 8px; background-color: #fff; overflow: hidden; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.02); }
+            .gpa-report-modal summary { padding: 14px 18px; font-weight: 600; font-size: 15px; color: #303133; cursor: pointer; list-style: none; outline: none; transition: background 0.2s; user-select: none; }
+            .gpa-report-modal summary:hover { background: #f0f7ff; color: #409EFF; }
             .gpa-report-modal summary::-webkit-details-marker { display: none; }
-            .gpa-report-modal summary::before { content: '▶'; margin-right: 10px; font-size: 14px; display: inline-block; transition: transform 0.2s; }
+            .gpa-report-modal summary::before { content: '▶'; margin-right: 10px; font-size: 12px; display: inline-block; transition: transform 0.2s; color: #909399; }
             .gpa-report-modal details[open] > summary::before { transform: rotate(90deg); }
-            .gpa-report-modal .details-content { padding: 0 15px 15px 15px; border-top: 1px solid #eee; }
-            .gpa-report-modal .tooltip-q { display: inline-block; width: 16px; height: 16px; border-radius: 50%; background-color: #a0a0a0; color: white; text-align: center; font-size: 12px; line-height: 16px; font-weight: bold; cursor: help; margin-left: 5px; vertical-align: middle; position: relative; }
-            .gpa-report-modal .tooltip-q:hover::after { content: attr(data-gm-tooltip); position: absolute; left: 50%; bottom: 120%; transform: translateX(-50%); background-color: #333; color: #fff; padding: 8px 12px; border-radius: 5px; font-size: 13px; font-weight: normal; white-space: pre-line; z-index: 10; box-shadow: 0 2px 5px rgba(0,0,0,0.2); width: max-content; max-width: 280px; }
+            .gpa-report-modal details[open] > summary { border-bottom: 1px solid #ebeef5; background: #fafafa; }
+
+            .gpa-calc-card { background: #fff; border: 1px solid #ebeef5; border-radius: 8px; padding: 20px; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.02); }
+            .gpa-calc-card h4 { margin: 0 0 16px 0; font-size: 15px; color: #303133; font-weight: 600; display: flex; align-items: center; gap: 8px;}
+            .input-group { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 15px; gap: 6px; }
+            .input-group label { width: 100%; font-size: 13px; color: #606266; font-weight: 500;}
+            .input-group input { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid #dcdfe6; border-radius: 6px; font-size: 14px; transition: all 0.2s; outline: none; background: #fafafa;}
+            .input-group input:focus { border-color: #409EFF; background: #fff; box-shadow: 0 0 0 2px rgba(64,158,255,0.1);}
+            .calculate-btn { width: 100%; padding: 10px; background-color: #409EFF; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; margin-top: 5px; transition: background 0.2s; }
+            .calculate-btn:hover { background-color: #66b1ff; }
+            .prediction-result { margin-top: 15px; font-weight: bold; text-align: center; font-size: 15px; min-height: 24px; color: #303133; background: #f0f9eb; padding: 12px; border-radius: 6px; display: none; }
+
+            .gpa-report-modal .tooltip-q { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background-color: #c0c4cc; color: white; font-size: 12px; cursor: help; margin-left: 6px; position: relative; }
+            .gpa-report-modal .tooltip-q:hover::after { content: attr(data-gm-tooltip); position: absolute; left: 50%; bottom: 130%; transform: translateX(-50%); background-color: #303133; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: normal; white-space: pre-line; z-index: 10; width: max-content; max-width: 280px; line-height: 1.4; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+            .disclaimer { font-size: 12px; color: #909399; margin-top: 20px; text-align: center; padding-top: 15px; border-top: 1px dashed #ebeef5; }
+            @keyframes gmFadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
         `;
         document.head.appendChild(style);
     }
+
     const mappingConfigString = Object.entries(GRADE_MAPPING_CONFIG).map(([key, value]) => `${key}: ${value}`).join(', ');
     const tooltipTextWithMapping = `使用百分制成绩和中文等级制分数进行计算\n您可以在脚本最上面配置参数，当前参数：\n${mappingConfigString}。`;
-    const overlay = document.createElement('div'); overlay.className = 'gpa-report-overlay';
-    const modal = document.createElement('div'); modal.className = 'gpa-report-modal';
-    let contentHTML = `<button class="close-btn" title="关闭">&times;</button><h2>GPA综合分析报告</h2><div class="current-gpa-module"><h3>当前学业总览</h3><p><strong>GPA：</strong> <strong>${reportData.gpa}</strong><br><strong>专业排名：</strong> ${reportData.gpaRankData.rank ?? '无数据'}<br><strong>前一名GPA：</strong> ${reportData.gpaRankData.beforeRankGpa ?? '无数据'}<br><strong>后一名GPA：</strong> ${reportData.gpaRankData.afterRankGpa ?? '无数据'}<br><strong>纳入GPA计算课程数：</strong> ${reportData.courseCount} 门<br><strong>总学分：</strong> ${reportData.totalCredits}<br><strong>总学分绩点：</strong> ${reportData.totalCreditPoints}<br><strong>加权百分制成绩：</strong> <strong>${reportData.weightedScoreNumeric}</strong> <span class="tooltip-q" data-gm-tooltip="仅计算百分制成绩，不含中文等级制成绩和PNP课程。">?</span><br><strong>加权百分制成绩 (含中文等级制成绩)：</strong> <strong>${reportData.weightedScoreWithMapping}</strong> <span class="tooltip-q" data-gm-tooltip="${tooltipTextWithMapping}">?</span></p></div><details><summary>预测GPA计算</summary><div class="prediction-module details-content"><div class="input-group"><label for="next-credits-a">下学期课程总学分:</label><input type="number" id="next-credits-a" placeholder="例如: 25"></div><div class="input-group"><label for="next-gpa-a">下学期预期平均GPA:</label><input type="number" id="next-gpa-a" step="0.01" placeholder="1.0 ~ 4.1"></div><button id="calculate-prediction-btn-a" class="calculate-btn">计算</button><p id="predicted-gpa-result-a" class="prediction-result"></p></div></details><details><summary>达成目标GPA所需均绩计算</summary><div class="prediction-module details-content"><div class="input-group"><label for="target-gpa-b">期望达到的总GPA:</label><input type="number" id="target-gpa-b" step="0.01" placeholder="例如: 3.80"></div><div class="input-group"><label for="next-credits-b">下学期课程总学分:</label><input type="number" id="next-credits-b" placeholder="例如: 20"></div><button id="calculate-target-btn-b" class="calculate-btn">计算</button><p id="target-gpa-result-b" class="prediction-result"></p></div></details><details class="stuck-analysis-section"><summary>卡绩分析</summary><div class="details-content">`;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'gpa-report-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'gpa-report-modal';
+
+    let contentHTML = `
+        <div class="gpa-modal-header">
+            <div class="gpa-modal-title">∑ GPA综合分析报告</div>
+            <button class="gpa-close-btn" title="关闭">&times;</button>
+        </div>
+        <div class="gpa-modal-body">
+            <div class="gpa-modal-grid">
+
+                <div class="gpa-column-left">
+                    <div class="current-gpa-module">
+                        <h3>当前学业总览</h3>
+                        <p style="line-height: 2;">
+                            <strong>GPA：</strong> <strong style="color:#409EFF; font-size:16px;">${reportData.gpa}</strong><br>
+                            <strong>专业排名：</strong> ${reportData.gpaRankData.rank ?? '无数据'}<br>
+                            <strong>前一名GPA：</strong> ${reportData.gpaRankData.beforeRankGpa ?? '无数据'}<br>
+                            <strong>后一名GPA：</strong> ${reportData.gpaRankData.afterRankGpa ?? '无数据'}<br>
+                            <strong>纳入计算课程：</strong> ${reportData.courseCount} 门<br>
+                            <strong>总学分：</strong> ${reportData.totalCredits}<br>
+                            <strong>总学分绩点：</strong> ${reportData.totalCreditPoints}<br>
+                            <strong>加权百分制成绩：</strong> <strong style="color:#67C23A;">${reportData.weightedScoreNumeric}</strong> <span class="tooltip-q" data-gm-tooltip="仅计算百分制成绩，不含中文等级制成绩和PNP课程。">?</span><br>
+                            <strong>加权百分制(含中文)：</strong> <strong style="color:#E6A23C;">${reportData.weightedScoreWithMapping}</strong> <span class="tooltip-q" data-gm-tooltip="${tooltipTextWithMapping}">?</span>
+                        </p>
+                    </div>
+                    <details class="stuck-analysis-section">
+                        <summary>卡绩分析</summary>
+                        <div class="details-content" style="padding: 18px;">
+    `;
+
     if (reportData.hasStuckCourses) {
-        let stuckCoursesListHTML = '<ul>';
-        reportData.stuckCoursesList.forEach(course => { stuckCoursesListHTML += `<li>${course['课程名称']} (成绩: ${course['成绩']}, 绩点: ${course['绩点']})</li>`; });
+        let stuckCoursesListHTML = '<ul style="padding-left: 20px; margin: 10px 0;">';
+        reportData.stuckCoursesList.forEach(course => {
+            stuckCoursesListHTML += `<li>${course['课程名称']} (成绩: ${course['成绩']}, 绩点: ${course['绩点']})</li>`;
+        });
         stuckCoursesListHTML += '</ul>';
-        contentHTML += `<p>发现 <strong>${reportData.stuckCoursesCount} 门</strong>卡绩科目，共计 <strong>${reportData.stuckCoursesCredits}</strong> 学分。</p>${stuckCoursesListHTML}<p>如果这些科目绩点均提高一个等级，您的GPA结果如下：</p><p><strong>总学分绩点：</strong> ${reportData.hypotheticalTotalCreditPoints}<br><strong>加权平均GPA：</strong> <strong style="color: #28a745;">${reportData.hypotheticalGpa}</strong></p>`;
-    } else { contentHTML += `<p>恭喜您！当前未发现卡绩科目。</p>`; }
-    contentHTML += `</div></details><p class="disclaimer">注意：此结果仅供参考，基于所有已获取的成绩数据计算，并非教务系统官方排名所用GPA。</p>`;
+        contentHTML += `
+            <p>发现 <strong style="color:#F56C6C;">${reportData.stuckCoursesCount} 门</strong>卡绩科目，共计 <strong>${reportData.stuckCoursesCredits}</strong> 学分。</p>
+            ${stuckCoursesListHTML}
+            <p style="margin-top:10px; border-top:1px dashed #eee; padding-top:10px;">如果这些科目成绩均提高1分，您的GPA结果为：</p>
+            <p>
+                <strong>总学分绩点：</strong> ${reportData.hypotheticalTotalCreditPoints}<br>
+                <strong>加权平均GPA：</strong> <strong style="color: #67C23A; font-size:16px;">${reportData.hypotheticalGpa}</strong>
+            </p>
+        `;
+    } else {
+        contentHTML += `<p style="color:#67C23A; font-weight:bold; text-align:center; padding: 10px 0;">[ 恭喜您！当前未发现卡绩科目 ]</p>`;
+    }
+
+    contentHTML += `
+                        </div>
+                    </details>
+                </div>
+
+                <div class="gpa-column-right">
+                    <div class="gpa-calc-card">
+                        <h4>
+                            <svg viewBox="0 0 24 24" width="18" height="18" stroke="#409EFF" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                            预估 GPA
+                        </h4>
+                        <div class="input-group">
+                            <label>下学期预计总学分：</label>
+                            <input type="number" id="next-credits-a" placeholder="例如: 25">
+                        </div>
+                        <div class="input-group">
+                            <label>期望达到的均绩(GPA)：</label>
+                            <input type="number" id="next-gpa-a" step="0.01" placeholder="1.0 ~ 4.1">
+                        </div>
+                        <button id="calculate-prediction-btn-a" class="calculate-btn">计算预测结果</button>
+                        <div id="predicted-gpa-result-a" class="prediction-result"></div>
+                    </div>
+
+                    <div class="gpa-calc-card">
+                        <h4>
+                            <svg viewBox="0 0 24 24" width="18" height="18" stroke="#67C23A" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+                            达成目标所需均绩
+                        </h4>
+                        <div class="input-group">
+                            <label>期望GPA：</label>
+                            <input type="number" id="target-gpa-b" step="0.01" placeholder="例如: 3.80">
+                        </div>
+                        <div class="input-group">
+                            <label>剩余未修总学分：</label>
+                            <input type="number" id="next-credits-b" placeholder="例如: 20">
+                        </div>
+                        <button id="calculate-target-btn-b" class="calculate-btn">计算所需成绩</button>
+                        <div id="target-gpa-result-b" class="prediction-result"></div>
+                    </div>
+                </div>
+
+            </div>
+            <p class="disclaimer">温馨提示：此结果仅供参考，基于所有已获取的成绩数据计算，可能与教务系统保研/评奖评优所用最终规则略有差异。</p>
+        </div>
+    `;
+
     modal.innerHTML = contentHTML;
-    overlay.appendChild(modal); document.body.appendChild(overlay);
-    const close = () => document.body.removeChild(overlay); overlay.querySelector('.close-btn').onclick = close; overlay.onclick = (e) => { if (e.target === overlay) close(); };
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const close = () => {
+        overlay.style.opacity = '0';
+        setTimeout(() => document.body.removeChild(overlay), 200);
+    };
+    overlay.querySelector('.gpa-close-btn').onclick = close;
+    overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
     const calculateBtnA = document.getElementById('calculate-prediction-btn-a');
     const nextCreditsInputA = document.getElementById('next-credits-a');
     const nextGpaInputA = document.getElementById('next-gpa-a');
     const resultDisplayA = document.getElementById('predicted-gpa-result-a');
+
     calculateBtnA.addEventListener('click', () => {
-        const nextCredits = parseFloat(nextCreditsInputA.value); const nextGpa = parseFloat(nextGpaInputA.value);
-        if (isNaN(nextCredits) || nextCredits <= 0 || isNaN(nextGpa) || nextGpa < 1.0 || nextGpa > 4.1) { resultDisplayA.textContent = '请输入有效的学分与GPA，且GPA应在1.0-4.1之间。'; return; }
-        const currentTotalCredits = parseFloat(reportData.totalCredits); const currentTotalCreditPoints = parseFloat(reportData.totalCreditPoints);
+        const nextCredits = parseFloat(nextCreditsInputA.value);
+        const nextGpa = parseFloat(nextGpaInputA.value);
+        resultDisplayA.style.display = 'block';
+
+        if (isNaN(nextCredits) || nextCredits <= 0 || isNaN(nextGpa) || nextGpa < 1.0 || nextGpa > 4.1) {
+            resultDisplayA.textContent = '⚠️ 请输入有效的学分与GPA\n(GPA应在1.0-4.1之间)';
+            resultDisplayA.style.color = '#F56C6C';
+            resultDisplayA.style.background = '#fef0f0';
+            return;
+        }
+        const currentTotalCredits = parseFloat(reportData.totalCredits);
+        const currentTotalCreditPoints = parseFloat(reportData.totalCreditPoints);
         const predictedOverallGPA = (currentTotalCreditPoints + (nextCredits * nextGpa)) / (currentTotalCredits + nextCredits);
-        resultDisplayA.innerHTML = `预测总GPA为: <span style="color: green; font-size: 18px;">${predictedOverallGPA.toFixed(4)}</span>`;
+
+        resultDisplayA.style.color = '#303133';
+        resultDisplayA.style.background = '#f0f9eb';
+        resultDisplayA.innerHTML = `总GPA将变为<br><span style="color: #67C23A; font-size: 22px;">${predictedOverallGPA.toFixed(4)}</span>`;
     });
+
     const calculateBtnB = document.getElementById('calculate-target-btn-b');
     const targetGpaInputB = document.getElementById('target-gpa-b');
     const nextCreditsInputB = document.getElementById('next-credits-b');
     const resultDisplayB = document.getElementById('target-gpa-result-b');
+
     calculateBtnB.addEventListener('click', () => {
-        const targetGpa = parseFloat(targetGpaInputB.value); const nextCredits = parseFloat(nextCreditsInputB.value);
-        if (isNaN(targetGpa) || targetGpa < 1.0 || targetGpa > 4.1 || isNaN(nextCredits) || nextCredits <= 0) { resultDisplayB.textContent = '请输入有效的学分与期望GPA。'; resultDisplayB.style.color = 'red'; return; }
-        const currentTotalCredits = parseFloat(reportData.totalCredits); const currentTotalCreditPoints = parseFloat(reportData.totalCreditPoints);
+        const targetGpa = parseFloat(targetGpaInputB.value);
+        const nextCredits = parseFloat(nextCreditsInputB.value);
+        resultDisplayB.style.display = 'block';
+
+        if (isNaN(targetGpa) || targetGpa < 1.0 || targetGpa > 4.1 || isNaN(nextCredits) || nextCredits <= 0) {
+            resultDisplayB.textContent = '⚠️ 请输入有效的学分与期望GPA';
+            resultDisplayB.style.color = '#F56C6C';
+            resultDisplayB.style.background = '#fef0f0';
+            return;
+        }
+        const currentTotalCredits = parseFloat(reportData.totalCredits);
+        const currentTotalCreditPoints = parseFloat(reportData.totalCreditPoints);
         const requiredCreditPointsNext = (targetGpa * (currentTotalCredits + nextCredits)) - currentTotalCreditPoints;
         const requiredGpaNext = requiredCreditPointsNext / nextCredits;
-        let resultHTML = `下学期需达到均绩: <span style="font-size: 18px; color: ${requiredGpaNext > 4.1 ? 'red' : 'green'};">${requiredGpaNext.toFixed(4)}</span>`;
-        if (requiredGpaNext > 4.1) { resultHTML += '<br><span style="color: red; font-size: 13px;">(目标过高，无法实现)</span>'; } else if (requiredGpaNext < 1.0) { resultHTML += '<br><span style="color: #6c757d; font-size: 13px;">(目标低于最低绩点要求)</span>'; }
+
+        let resultHTML = `剩余课程均绩需达到<br><span style="font-size: 22px; color: ${requiredGpaNext > 4.1 ? '#F56C6C' : '#67C23A'};">${requiredGpaNext.toFixed(4)}</span>`;
+
+        if (requiredGpaNext > 4.1) {
+            resultHTML += '<br><span style="color: #F56C6C; font-size: 13px; font-weight:normal;">(目标过高，当前评分体系无法实现)</span>';
+            resultDisplayB.style.background = '#fef0f0';
+        } else if (requiredGpaNext < 1.0) {
+            resultHTML += '<br><span style="color: #909399; font-size: 13px; font-weight:normal;">(闭着眼考都能实现)</span>';
+            resultDisplayB.style.background = '#f4f4f5';
+        } else {
+            resultDisplayB.style.background = '#f0f9eb';
+        }
+
+        resultDisplayB.style.color = '#303133';
         resultDisplayB.innerHTML = resultHTML;
     });
 }
@@ -2719,6 +3165,7 @@ function formatCacheAge(ms) {
 // ----------------- 2.4 学生画像增强 -----------------
 
 function precomputeAllWeightedScores(allGrades) {
+    if (!allGrades) return {};
     const scoresBySemester = {}; const gradesBySemester = {};
     allGrades.forEach(grade => { const semester = grade['学期']; if (!gradesBySemester[semester]) gradesBySemester[semester] = []; gradesBySemester[semester].push(grade); });
     const calculate = (grades) => {
@@ -2735,79 +3182,196 @@ function precomputeAllWeightedScores(allGrades) {
     return scoresBySemester;
 }
 
-function setupSemesterChangeObserver(weightedScores) {
-    const targetNode = document.querySelector('.myScore .el-select .el-input__inner');
-    if (!targetNode || targetNode.dataset.gmListenerAttached) return;
-    let lastValue = targetNode.value;
-    setInterval(() => {
-        if (!ConfigManager.enablePortraitEnhancement || !document.body.contains(targetNode)) return;
-        const currentValue = targetNode.value;
-        if (currentValue !== lastValue) {
-            lastValue = currentValue;
-            const scoreTile = document.getElementById('gm-weighted-score-tile');
-            if (scoreTile) {
-                const semesterKey = currentValue || "全部";
-                const scoreData = weightedScores[semesterKey] || { weightedScore: 'N/A' };
-                const scoreSpan = scoreTile.querySelector('.score');
-                if (scoreSpan) scoreSpan.textContent = scoreData.weightedScore;
-            }
-        }
-    }, 200);
-    targetNode.dataset.gmListenerAttached = 'true';
-}
-
 function injectTooltipStylesForPortrait() {
     const styleId = 'gm-tooltip-styles-portrait'; if (document.getElementById(styleId)) return;
     const style = document.createElement('style'); style.id = styleId;
     style.textContent = `
         .gm-tooltip-trigger { position: relative; cursor: help; font-family: "iconfont" !important; font-size: 14px; font-style: normal; }
         .gm-tooltip-trigger:hover::after { content: attr(data-gm-tooltip); position: absolute; bottom: 125%; left: 50%; transform: translateX(-50%); background-color: #303133; color: #fff; padding: 8px 12px; border-radius: 4px; font-size: 12px; line-height: 1.4; white-space: pre-line; z-index: 10001; display: inline-block; width: max-content; max-width: 280px; box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1); pointer-events: none; }
+        .el-card__body .header { display: flex; justify-content: space-between; align-items: center; }
+        .gm-trend-toggle-btn { padding: 5px 12px; font-size: 13px; border-radius: 4px; border: 1px solid #dcdfe6; background: #fff; color: #606266; cursor: pointer; transition: all 0.3s; outline: none; }
+        .gm-trend-toggle-btn:hover { color: #409EFF; border-color: #c6e2ff; background-color: #ecf5ff; }
+        .gm-trend-toggle-btn.active { color: #409EFF; border-color: #409EFF; background-color: #ecf5ff; font-weight: bold; }
+        .gm-trend-detail-panel { overflow: hidden; transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); max-height: 0; opacity: 0; margin-top: 0; padding-top: 0; border-top: 1px dashed transparent; }
+        .gm-trend-detail-panel.show { max-height: 800px; opacity: 1; margin-top: 15px; padding-top: 15px; border-top-color: #ebeef5; }
+        .gm-trend-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+        .gm-trend-card { background: #fafafa; border: 1px solid #ebeef5; border-radius: 6px; padding: 10px 12px; transition: all 0.3s; position: relative; }
+        .gm-trend-card:hover { box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05); background: #fff; }
+        .gm-tc-close { position: absolute; top: 4px; right: 6px; font-size: 16px; color: #c0c4cc; cursor: pointer; line-height: 1; transition: color 0.2s, transform 0.2s; user-select: none; }
+        .gm-tc-close:hover { color: #f56c6c; transform: scale(1.2); }
+        .gm-tc-title { font-size: 13px; font-weight: bold; color: #303133; margin-bottom: 8px; text-align: center; padding: 0 10px;}
+        .gm-tc-row { display: flex; align-items: center; font-size: 12px; color: #666; margin-top: 4px; line-height: 1; }
+        .gm-tc-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }
+        .gm-tc-val { margin-left: auto; font-weight: 900; font-family: Consolas, monospace; font-size: 13px; color: #333; }
     `;
     document.head.appendChild(style);
 }
 
 function updateSummaryTilesForPortrait(data, scoreContentElement, weightedScores) {
-    if (!scoreContentElement) return;
+    if (!scoreContentElement || !ConfigManager.enablePortraitEnhancement) return;
+
     const infoDivs = Array.from(scoreContentElement.querySelectorAll('.info'));
     const avgScoreLabel = infoDivs.find(el => el.textContent.includes("平均分") || el.textContent.includes("加权分") || el.dataset.originalHtml);
-    const majorRankTileId = 'gm-major-rank-tile';
-    const majorRankTile = document.getElementById(majorRankTileId);
+    if (!avgScoreLabel) return;
 
-    if (!ConfigManager.enablePortraitEnhancement) {
-        if (avgScoreLabel && avgScoreLabel.dataset.originalHtml) {
-            avgScoreLabel.innerHTML = avgScoreLabel.dataset.originalHtml;
-            delete avgScoreLabel.dataset.originalHtml;
-            const avgScoreTile = avgScoreLabel.closest('.score-item');
-            if (avgScoreTile) avgScoreTile.removeAttribute('id');
+    const majorRankTileId = 'gm-major-rank-tile';
+    let rankTile = document.getElementById(majorRankTileId);
+    let avgScoreTile = avgScoreLabel.closest('.score-item');
+
+    const semInput = document.querySelector('.myScore .el-select .el-input__inner');
+    const currentSem = semInput ? (semInput.value || '全部') : '全部';
+    const currentScoreData = weightedScores[currentSem] || {
+        weightedScore: data ? 'N/A' : '计算中...',
+        tooltipText: data ? '未找到成绩' : '正在拉取成绩与计算中...'
+    };
+    const currentRankValue = data ? (data.gpaRankData?.rank ?? '无数据') : '获取中...';
+
+    if (scoreContentElement.dataset.gmEnhancedSummary === 'true') {
+        if (avgScoreTile) {
+            const scoreValDiv = avgScoreTile.querySelector('.score');
+            if (scoreValDiv && scoreValDiv.textContent !== currentScoreData.weightedScore) {
+                scoreValDiv.textContent = currentScoreData.weightedScore;
+            }
+            const tooltipTrigger = avgScoreTile.querySelector('.gm-tooltip-trigger');
+            if (tooltipTrigger) tooltipTrigger.setAttribute('data-gm-tooltip', currentScoreData.tooltipText);
         }
-        if (majorRankTile) majorRankTile.remove();
-        scoreContentElement.removeAttribute('data-gm-enhanced-summary');
+        if (rankTile) {
+            const rankValDiv = rankTile.querySelector('.score');
+            if (rankValDiv && rankValDiv.textContent !== currentRankValue) {
+                rankValDiv.textContent = currentRankValue;
+            }
+        }
         return;
     }
 
-    if (!avgScoreLabel || (scoreContentElement.dataset.gmEnhancedSummary === 'true' && document.getElementById(majorRankTileId))) return;
-
-    const { gpaRankData } = data;
-    const avgScoreTile = avgScoreLabel.closest('.score-item');
+    // --- 初次构建 DOM ---
     if (avgScoreTile) {
         avgScoreTile.id = 'gm-weighted-score-tile';
         if (!avgScoreLabel.dataset.originalHtml) avgScoreLabel.dataset.originalHtml = avgScoreLabel.innerHTML;
-        const initialScoreData = weightedScores['全部'] || { weightedScore: 'N/A', tooltipText: '' };
-        avgScoreLabel.innerHTML = `加权百分制分数 <i class="iconfont icon-bangzhu gm-tooltip-trigger" data-gm-tooltip="${initialScoreData.tooltipText}"></i>`;
+        avgScoreLabel.innerHTML = `加权百分制分数 <i class="iconfont icon-bangzhu gm-tooltip-trigger" data-gm-tooltip="${currentScoreData.tooltipText}"></i>`;
         const scoreValDiv = avgScoreTile.querySelector('.score');
-        if (scoreValDiv) scoreValDiv.textContent = initialScoreData.weightedScore;
+        if (scoreValDiv) scoreValDiv.textContent = currentScoreData.weightedScore;
     }
 
-    if (!document.getElementById(majorRankTileId)) {
-        const rankValue = gpaRankData?.rank ?? '无数据';
-        const rankDiv = document.createElement('li');
-        rankDiv.id = majorRankTileId;
-        rankDiv.className = 'score-item';
-        rankDiv.style.background = '#17a2b8';
-        rankDiv.innerHTML = `<div class="icon-img"><i class="iconfont icon-paiming2"></i></div><div class="score-info"><div class="score">${rankValue}</div><div class="info">专业排名 <i class="iconfont icon-bangzhu gm-tooltip-trigger" data-gm-tooltip="排名数据来自教务系统\n若无则显示'无数据'"></i></div>`;
-        scoreContentElement.appendChild(rankDiv);
+    if (!rankTile) {
+        rankTile = document.createElement('li');
+        rankTile.id = majorRankTileId;
+        rankTile.className = 'score-item';
+        rankTile.style.background = '#17a2b8';
+        rankTile.innerHTML = `<div class="icon-img"><i class="iconfont icon-paiming2"></i></div><div class="score-info"><div class="score">${currentRankValue}</div><div class="info">专业排名 <i class="iconfont icon-bangzhu gm-tooltip-trigger" data-gm-tooltip="排名数据来自教务系统\n若无则显示'无数据'"></i></div>`;
+        scoreContentElement.appendChild(rankTile);
     }
+
     scoreContentElement.dataset.gmEnhancedSummary = 'true';
+}
+
+function enhanceScoreTrendChart(data, weightedScores, forceRebuild = false) {
+    if (!ConfigManager.enablePortraitEnhancement) return;
+
+    const chartContainer = document.getElementById('semesterScoreLine');
+    if (!chartContainer) return;
+
+    const cardBody = chartContainer.closest('.el-card__body');
+    const header = cardBody ? cardBody.querySelector('.header') : null;
+    if (!header) return;
+
+    const existingBtn = header.querySelector('.gm-trend-toggle-btn');
+    const existingPanel = chartContainer.parentNode.querySelector('.gm-trend-detail-panel');
+
+    // 正常观察模式下，如果有缓存且没要求强制重绘，直接跳过
+    if (!forceRebuild && existingBtn && existingPanel && header.dataset.gmEnhancedTrend === 'true') {
+        return;
+    }
+
+    // 强制重绘时，彻底清理旧组件防止双按钮
+    if (existingBtn) existingBtn.remove();
+    if (existingPanel) existingPanel.remove();
+
+    const btn = document.createElement('button');
+    btn.className = 'gm-trend-toggle-btn';
+    btn.innerHTML = '展开数据';
+    header.appendChild(btn);
+    header.dataset.gmEnhancedTrend = 'true';
+
+    const panel = document.createElement('div');
+    panel.className = 'gm-trend-detail-panel';
+
+    let html = '';
+    // 如果还没获取到数据，渲染占位符
+    if (!data) {
+        html = '<div style="padding: 25px; text-align: center; color: #909399; font-size: 13px;">正在获取历史成绩详情，请稍候...</div>';
+    } else {
+        const semesterMap = {};
+        data.allGrades.forEach(g => {
+            const sem = g['学期'];
+            if (!semesterMap[sem]) semesterMap[sem] = { credits: 0, points: 0 };
+            const credit = parseFloat(g['学分']) || 0;
+            const gp = parseFloat(g['绩点']);
+            if (credit > 0 && !isNaN(gp)) {
+                semesterMap[sem].credits += credit;
+                semesterMap[sem].points += gp * credit;
+            }
+        });
+
+        html = '<div class="gm-trend-grid">';
+        const sortedSemesters = data.semesterNames ? [...data.semesterNames].reverse() : Object.keys(semesterMap).sort();
+
+        sortedSemesters.forEach(sem => {
+            const stats = semesterMap[sem];
+            if (!stats) return;
+
+            const gpa = stats.credits > 0 ? (stats.points / stats.credits).toFixed(2) : '-';
+            const avgData = weightedScores[sem];
+            const avg = avgData && avgData.weightedScore !== 'N/A' ? avgData.weightedScore : '-';
+
+            html += `
+                <div class="gm-trend-card">
+                    <span class="gm-tc-close" title="关闭此项">&times;</span>
+                    <div class="gm-tc-title">${sem}</div>
+                    <div class="gm-tc-row">
+                        <span class="gm-tc-dot" style="background:#F6DF49"></span>
+                        <span>加权成绩</span>
+                        <span class="gm-tc-val">${avg}</span>
+                    </div>
+                    <div class="gm-tc-row">
+                        <span class="gm-tc-dot" style="background:#5B9BD5"></span>
+                        <span>GPA</span>
+                        <span class="gm-tc-val">${gpa}</span>
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+    }
+
+    panel.innerHTML = html;
+    chartContainer.parentNode.insertBefore(panel, chartContainer.nextSibling);
+
+    panel.addEventListener('click', (e) => {
+        if (e.target.classList.contains('gm-tc-close')) {
+            const card = e.target.closest('.gm-trend-card');
+            if (card) {
+                card.style.transform = 'scale(0.8)'; card.style.opacity = '0';
+                setTimeout(() => { card.style.display = 'none'; }, 200);
+            }
+        }
+    });
+
+    btn.onclick = () => {
+        const isHidden = !panel.classList.contains('show');
+        if (isHidden) {
+            panel.querySelectorAll('.gm-trend-card').forEach(c => {
+                c.style.display = ''; c.style.opacity = '1'; c.style.transform = 'scale(1)';
+            });
+            panel.classList.add('show');
+            btn.classList.add('active');
+            btn.innerHTML = '收起数据';
+        } else {
+            panel.classList.remove('show');
+            btn.classList.remove('active');
+            btn.innerHTML = '展开数据';
+        }
+    };
 }
 
 function getPassStatus(score) {
@@ -2820,7 +3384,9 @@ function getPassStatus(score) {
     return '';
 }
 
-function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer) {
+function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer, forceRebuild = false) {
+    if (!data) return; // 无数据时不处理
+
     const enhancedId = 'gm-enhanced-table-wrapper';
     let enhancedContainer = document.getElementById(enhancedId);
 
@@ -2831,7 +3397,13 @@ function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer) {
         return;
     }
 
-    if (originalTableContainer.dataset.gmEnhanced === 'true' && enhancedContainer) return;
+    // 正常状态跳过
+    if (!forceRebuild && originalTableContainer.dataset.gmEnhanced === 'true' && enhancedContainer) {
+        return;
+    }
+
+    // 热更新时，暴力清空旧表格
+    if (enhancedContainer) enhancedContainer.remove();
 
     const outOfPlanCourseCodes = new Set();
     const rows = originalTableContainer.querySelectorAll('.el-table__body-wrapper tbody tr');
@@ -2860,12 +3432,10 @@ function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer) {
     let paddingLeft = '20px';
     if (originalHandler && originalHandler.style.paddingLeft) paddingLeft = originalHandler.style.paddingLeft;
 
-    if (!enhancedContainer) {
-        enhancedContainer = document.createElement('div');
-        enhancedContainer.id = enhancedId;
-        enhancedContainer.className = 'node-wrapper courseTreeNode marginBottom';
-        originalTableContainer.insertAdjacentElement('afterend', enhancedContainer);
-    }
+    enhancedContainer = document.createElement('div');
+    enhancedContainer.id = enhancedId;
+    enhancedContainer.className = 'node-wrapper courseTreeNode marginBottom';
+    originalTableContainer.insertAdjacentElement('afterend', enhancedContainer);
 
     const colGroupHTML = `<colgroup><col width="48"><col width="200"><col width="100"><col width="120"><col width="80"><col width="60"><col width="60"><col width="60"><col width="100"><col width="80"></colgroup>`;
     const headerHTML = `<div class="el-table__header-wrapper"><table cellspacing="0" cellpadding="0" border="0" class="el-table__header" style="width: 100%;">${colGroupHTML}<thead class="has-gutter"><tr class="table-header"><th class="is-leaf" width="50"><div class="cell">序号</div></th><th class="is-leaf"><div class="cell">课程名称</div></th><th class="is-leaf" width="100"><div class="cell">课程代码</div></th><th class="is-leaf" width="120"><div class="cell">学年学期</div></th><th class="is-leaf" width="80"><div class="cell">是否必修</div></th><th class="is-leaf" width="60"><div class="cell">学分</div></th><th class="is-leaf" width="60"><div class="cell">成绩</div></th><th class="is-leaf" width="60"><div class="cell">绩点</div></th><th class="is-leaf" width="100"><div class="cell">教学班排名</div></th><th class="is-leaf" width="80"><div class="cell">是否通过</div></th></tr></thead></table></div>`;
@@ -2876,7 +3446,7 @@ function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer) {
         const scoreStyle = isFail ? 'color: #F56C6C; font-weight: bold;' : '';
         const passStatus = getPassStatus(score);
         return `<tr class="el-table__row"><td class="cell-style"><div class="cell">${index + 1}</div></td><td class="cell-style"><div class="cell el-tooltip"><span class="value">${grade['课程名称'] || ''}</span></div></td><td class="cell-style"><div class="cell el-tooltip">${grade['课程代码'] || ''}</div></td><td class="cell-style"><div class="cell el-tooltip">${grade['学期'] || ''}</div></td><td class="cell-style"><div class="cell el-tooltip"><span class="value">${grade['是否必修'] ? '是' : '否'}</span></div></td><td class="cell-style"><div class="cell el-tooltip">${grade['学分'] || ''}</div></td><td class="cell-style"><div class="cell el-tooltip" style="${scoreStyle}">${grade['成绩'] || ''}</div></td><td class="cell-style"><div class="cell el-tooltip">${grade['绩点'] ?? ''}</div></td><td class="cell-style"><div class="cell el-tooltip"><span class="value">${classRankMap.get(grade['课程代码']) || '-'}</span></div></td><td class="cell-style"><div class="cell el-tooltip">${passStatus}</div></td></tr>`;
-    }).join('');//`
+    }).join('');
 
     const bodyHTML = `<div class="el-table__body-wrapper is-scrolling-left"><table cellspacing="0" cellpadding="0" border="0" class="el-table__body" style="width: 100%;">${colGroupHTML}<tbody>${tableBodyRows}</tbody></table></div>`;
 
@@ -2894,58 +3464,79 @@ function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer) {
     originalTableContainer.dataset.gmEnhanced = 'true';
 }
 
-function applyPortraitSettings() {
-    if (!window.location.href.includes('student-portrait')) return;
-    const cachedData = getCachedData();
-    if (!cachedData) return;
-    const weightedScores = precomputeAllWeightedScores(cachedData.allGrades);
-    const scoreContent = document.querySelector(".score-content");
-    if (scoreContent) updateSummaryTilesForPortrait(cachedData, scoreContent, weightedScores);
-    const outOfPlanTable = document.querySelector('.outPlanTable');
-    if (outOfPlanTable) createEnhancedOutOfPlanTableForPortrait(cachedData, outOfPlanTable);
-}
-
 async function enhancePortraitPage() {
     while (!document.body || !document.querySelector(".score-content")) { await new Promise(resolve => setTimeout(resolve, 50)); }
     Logger.log("2.4", "脚本已在学生画像页激活");
     injectTooltipStylesForPortrait();
 
-    let data = getCachedData();
-    if (!data) {
-        try { data = await fetchAllDataAndCache(); }
-        catch (err) { Logger.error("2.4", "获取数据失败:", err); return; }
-    }
-    const weightedScores = precomputeAllWeightedScores(data.allGrades);
+    // 声明状态
+    let currentData = getCachedData();
+    let currentWeightedScores = currentData ? precomputeAllWeightedScores(currentData.allGrades) : {};
 
-    applyPortraitSettings();
-
-    const observer = new MutationObserver((mutations, obs) => {
+    // 渲染方法 (常规调配)
+    const renderAllComponents = () => {
+        if (!ConfigManager.enablePortraitEnhancement) return;
         const scoreContent = document.querySelector(".score-content");
-        const outOfPlanTable = document.querySelector('.outPlanTable');
-        const isEnabled = ConfigManager.enablePortraitEnhancement;
+        if (scoreContent) updateSummaryTilesForPortrait(currentData, scoreContent, currentWeightedScores);
 
-        if (scoreContent) {
-             const isEnhanced = scoreContent.hasAttribute('data-gm-enhanced-summary');
-             if ((isEnabled && !isEnhanced) || (!isEnabled && isEnhanced)) {
-                 updateSummaryTilesForPortrait(data, scoreContent, weightedScores);
-                 if (isEnabled) setupSemesterChangeObserver(weightedScores);
-             }
+        const outOfPlanTable = document.querySelector('.outPlanTable');
+        if (outOfPlanTable && outOfPlanTable.querySelector('.el-table__body-wrapper tbody tr')) {
+            createEnhancedOutOfPlanTableForPortrait(currentData, outOfPlanTable);
         }
-        if (outOfPlanTable) {
-            const isTableEnhanced = outOfPlanTable.hasAttribute('data-gm-enhanced');
-            if (outOfPlanTable.querySelector('.el-table__body-wrapper tbody tr')) {
-                 if ((isEnabled && !isTableEnhanced) || (!isEnabled && isTableEnhanced)) {
-                     createEnhancedOutOfPlanTableForPortrait(data, outOfPlanTable);
-                 }
+
+        enhanceScoreTrendChart(currentData, currentWeightedScores);
+    };
+
+    // 热更新方法 (数据到达后，强制推翻重建)
+    const triggerHotUpdate = () => {
+        Logger.log("2.4", "执行热更新...");
+        const scoreContent = document.querySelector(".score-content");
+        if (scoreContent) updateSummaryTilesForPortrait(currentData, scoreContent, currentWeightedScores);
+
+        const outOfPlanTable = document.querySelector('.outPlanTable');
+        if (outOfPlanTable && outOfPlanTable.querySelector('.el-table__body-wrapper tbody tr')) {
+            createEnhancedOutOfPlanTableForPortrait(currentData, outOfPlanTable, true); // 传递 true 强制更新
+        }
+
+        enhanceScoreTrendChart(currentData, currentWeightedScores, true); // 传递 true 强制更新
+    };
+
+    // ============ 执行流程 ============
+
+    // 1. 立即挂载（无论有无缓存均立即展示界面骨架）
+    renderAllComponents();
+
+    // 2. 异步请求数据不阻塞主线程，一旦完成，延后 100ms（避开Vue更新冲突）执行热更新
+    fetchAllDataAndCache().then(freshData => {
+        currentData = freshData;
+        currentWeightedScores = precomputeAllWeightedScores(freshData.allGrades);
+        setTimeout(triggerHotUpdate, 150);
+    }).catch(err => {
+        Logger.error("2.4", "静默获取成绩失败:", err);
+    });
+
+    // 3. 监听 Vue 的原生 DOM 修改，并在学期下拉框变更时自动更新卡片
+    window._gm_last_portrait_sem = null;
+    const observer = new MutationObserver(() => {
+        if (!ConfigManager.enablePortraitEnhancement) return;
+
+        const semInput = document.querySelector('.myScore .el-select .el-input__inner');
+        if (semInput) {
+            const currentSem = semInput.value || '全部';
+            if (currentSem !== window._gm_last_portrait_sem) {
+                window._gm_last_portrait_sem = currentSem;
+                updateSummaryTilesForPortrait(currentData, document.querySelector(".score-content"), currentWeightedScores);
             }
         }
+
+        // 常规容错：如果 Vue 刷新掉了组件，自动补回
+        renderAllComponents();
     });
+
     observer.observe(document.body, { childList: true, subtree: true });
 }
 
-
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.5 全校开课查询页选课记录 =-=-=-=-=-=-=-=-=-=-=-=-=
-
 /**
  * 全校开课查询页面增强模块
  * 包含：历史记录显示、控制面板UI、自动翻页同步逻辑
@@ -3265,6 +3856,52 @@ if (window.location.href.includes('/student/for-std/lesson-search')) {
     }
 }
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.6 课程关注 =-=-=-=-=-=-=-=-=-=-=-=-=
+/**
+ * 将表格行中的教师姓名转换为可点击的教师主页搜索链接
+ */
+function enhanceTeacherNames(row) {
+    if (!document.getElementById('gm-teacher-link-style')) {
+        const style = document.createElement('style');
+        style.id = 'gm-teacher-link-style';
+        style.textContent = `
+            .gm-teacher-link { color: #409EFF !important; text-decoration: none; font-weight: bold; transition: all 0.2s; cursor: pointer; }
+            .gm-teacher-link:hover { color: #0056b3 !important; text-decoration: underline; background-color: rgba(64,158,255,0.1); border-radius: 4px; padding: 2px 4px; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    const teacherEl = row.querySelector('.course-teacher');
+    if (!teacherEl || teacherEl.dataset.gmLinked === "true") return;
+
+    const rawText = teacherEl.innerText.trim();
+    if (!rawText || rawText === '待定' || rawText === '-') return;
+
+    teacherEl.dataset.gmLinked = "true";
+    teacherEl.innerHTML = ''; // 清空原文本
+
+    // 按空格、逗号、分号拆分多个教师
+    const names = rawText.split(/[\s,，;；]+/);
+    names.forEach((name, idx) => {
+        if (!name) return;
+        const a = document.createElement('a');
+        a.className = 'gm-teacher-link';
+        a.textContent = name;
+        a.title = `点击搜索 ${name} 的教师主页`;
+        a.href = "javascript:void(0);";
+        a.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            GM_setValue('gm_cross_search_name', name);
+            window.open('https://teacher.nwpu.edu.cn/search/syss/.html', '_blank');
+        };
+        teacherEl.appendChild(a);
+
+        // 如果有多个教师，补充间隔符
+        if (idx < names.length - 1) {
+            teacherEl.appendChild(document.createTextNode(' '));
+        }
+    });
+}
 
 /**
  * 在开课查询页面的表格中注入关注按钮
@@ -3322,6 +3959,8 @@ function injectFollowButtons() {
     const rows = scrollBodyTable.querySelectorAll('tbody tr');
     rows.forEach(row => {
         if (row.querySelector('.dataTables_empty')) return;
+
+        enhanceTeacherNames(row);
 
         const firstTd = row.querySelector('td:first-child');
         const checkbox = row.querySelector('input[name="model_id"]');
@@ -3692,6 +4331,8 @@ if (window.location.href.includes('/course-selection')) {
         // ==============================================================================
 
         function processRowWithCode(row, mode) {
+            enhanceTeacherNames(row);
+
             let courseCode = null;
             // 1. 尝试获取课程代码
             const accurateCodeElement = row.querySelector('div.lesson-code > a.link-url');
@@ -3879,7 +4520,6 @@ if (window.location.href.includes('/course-selection')) {
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.8 后台静默数据同步 =-=-=-=-=-=-=-=-=-=-=-=-=
-
 const BackgroundSyncSystem = {
     WORKER_NAME: 'gm_bg_sync_worker_frame',
 
@@ -4070,7 +4710,6 @@ const BackgroundSyncSystem = {
 };
 
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.9 培养方案课程代码智能预览 =-=-=-=-=-=-=-=-=-=-=-=-=
-
 function initProgramPageEnhancement() {
     // 检查功能开关
     if (!ConfigManager.enableCourseWatch) {
@@ -4655,7 +5294,6 @@ function initScheduleWidget() {
 }
 
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.11 自动评教模块 =-=-=-=-=-=-=-=-=-=-=-=-=
-
 function initEvaluationHelper() {
     const IS_TEST_MODE = false; // 正式使用请设为 false
 
@@ -5229,37 +5867,196 @@ function initEvaluationHelper() {
     else window.addEventListener('load', startObserve);
 }
 
-// =-=-=-=-=-=-=-=-=-=-=-=-= 2.12 人员信息检索模块 =-=-=-=-=-=-=-=-=-=-=-=-=
+// =-=-=-=-=-=-=-=-=-=-=-=-= 2.12 人员信息检索 =-=-=-=-=-=-=-=-=-=-=-=-=
 const PersonnelSearch = {
 
     STORAGE_KEY: "nwpu_synced_token",
     API_BASE: CONSTANTS.API_PERSONNEL,
-    state: { page: 1, loading: false, hasMore: true, keyword: "" },
+    state: { page: 1, loading: false, hasMore: true, keyword: "", items: [] },
 
-    // 1. Token 同步逻辑 (运行在 ecampus 域名下)
+    // 名片动态渐变色系库
+    THEME_COLORS: [
+        { bg: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)', text: '#0084ff' }, // 经典蓝
+        { bg: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)', text: '#21b25b' }, // 清新绿
+        { bg: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)', text: '#e64e7c' }, // 晚霞粉
+        { bg: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)', text: '#8c6ad1' }, // 梦幻紫
+        { bg: 'linear-gradient(135deg, #f6d365 0%, #fda085 100%)', text: '#e8753a' }  // 活力橙
+    ],
+
+    // 中国大陆及港澳台省级行政区划代码字典 (前2位)
+    PROVINCE_MAP: {
+        11: "北京", 12: "天津", 13: "河北", 14: "山西", 15: "内蒙古",
+        21: "辽宁", 22: "吉林", 23: "黑龙江", 31: "上海", 32: "江苏",
+        33: "浙江", 34: "安徽", 35: "福建", 36: "江西", 37: "山东",
+        41: "河南", 42: "湖北", 43: "湖南", 44: "广东", 45: "广西",
+        46: "海南", 50: "重庆", 51: "四川", 52: "贵州", 53: "云南",
+        54: "西藏", 61: "陕西", 62: "甘肃", 63: "青海", 64: "宁夏",
+        65: "新疆", 71: "台湾", 81: "香港", 82: "澳门", 83: "台湾"
+    },
+
+    _inferIdentity(id) {
+        if (!id) return { short: '', long: '' };
+
+        // 规则1：检查是否为 10 位字符（前4位数字年份，5-6位类型码允许字母，后4位数字编号）
+        if (id.length === 10 && /^\d{4}[A-Z0-9]{2}\d{4}$/i.test(id)) {
+            const year = id.substring(0, 4);
+            const typeCode = id.substring(4, 6).toUpperCase();
+
+            let shortLabel = '';
+            let longLabel = '';
+            let yearSuffix = '级';
+
+            switch (typeCode) {
+                case '10': shortLabel = '博士生'; longLabel = '学术型 博士研究生'; break;
+                case '11': shortLabel = '博士生'; longLabel = '专项计划 博士研究生'; break;
+                case '12': shortLabel = '博士'; longLabel = '同等学力申请博士学位'; yearSuffix = '年申请';break;
+                case '16': shortLabel = '博士生'; longLabel = '专业型 博士研究生'; break;
+                case '18': shortLabel = '留学生'; longLabel = '国际留学生 (博士)'; break;
+                case '20': shortLabel = '学硕'; longLabel = '全日制 学术型 硕士研究生'; break;
+                case '21': shortLabel = '专硕'; longLabel = '非全日制 专业型 硕士研究生'; break;
+                case '22': shortLabel = '硕士'; longLabel = '同等学力申请硕士学位'; yearSuffix = '年申请';break;
+                case '24': shortLabel = ''; longLabel = '';break;
+                case '25': shortLabel = ''; longLabel = '';break;
+                case '26': shortLabel = '专硕'; longLabel = '全日制 专业型 硕士研究生'; break;
+                case '28': shortLabel = '留学生'; longLabel = '国际留学生 (硕士)'; break;
+                case '30': shortLabel = '本科生'; longLabel = '本科生'; break;
+                case '32': shortLabel = '第二学位'; longLabel = '第二学士学位本科生'; break;
+                case '37': shortLabel = '交换生'; longLabel = '本科交换生'; break;
+                case '38': shortLabel = '留学生'; longLabel = '国际留学生 (本科)'; break;
+                case '70': shortLabel = '预科生'; longLabel = '预科生'; break;
+                case '00':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '01':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '02':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '03':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '05':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '06':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '07':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '08':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '0P':
+                    shortLabel = '职工';
+                    longLabel = '职工';
+                    yearSuffix = '年入职';
+                    break;
+                case '1K':
+                    shortLabel = '博士';
+                    longLabel = '翱翔快响专项计划录取博士生';
+                    break;
+                case '1P':
+                    shortLabel = '职工';
+                    longLabel = '后勤部职工';
+                    yearSuffix = '年入职';
+                    break;
+                default:
+                    return { short: '', long: '' };
+            }
+
+            return {
+                short: shortLabel,
+                long: `${year}${yearSuffix} ${longLabel}`
+            };
+        }
+
+        // 规则2：检查是否为 8 位纯数字（退休）
+        if (id.length === 8 && /^\d{8}$/.test(id)) {
+            return {
+                short: '离/退休',
+            };
+        }
+
+        // 规则3：检查是否为 6 位纯数字（早期学号）
+        if (id.length === 6 && /^\d{6}$/.test(id)) {
+            const shortYear = '20' + id.substring(0, 2);
+            return {
+                short: '本科生',
+                long: `${shortYear}级 本科生`
+            };
+        }
+
+        return { short: '', long: '' };
+    },
+
+    _parseIDCard(sfzjh) {
+        if (!sfzjh) return null;
+
+        // 1. 大陆身份证 及 港澳台居民居住证（18位脱敏，第17位包含性别）
+        // (居住证前两位：81香港，82澳门，83台湾)
+        if (sfzjh.length === 18 && /^[1-9]\d\*{14}\d[\dXx]$/i.test(sfzjh)) {
+            const provCode = sfzjh.substring(0, 2);
+            const genderNum = parseInt(sfzjh.charAt(16), 10);
+            return {
+                type: '身份证/居住证',
+                province: this.PROVINCE_MAP[provCode] || '未知区域',
+                gender: (genderNum % 2 === 1) ? '男' : '女'
+            };
+        }
+
+        // 2. 港澳居民来往内地通行证 (回乡证，9位字符脱敏)
+        if (sfzjh.length === 9 && /^[HMhm]\d\*{5}\d{2}$/.test(sfzjh)) {
+            const firstLetter = sfzjh.charAt(0).toUpperCase();
+            return {
+                type: '港澳通行证',
+                province: firstLetter === 'H' ? '香港' : '澳门',
+                gender: '未知' // 通行证号码不包含性别信息
+            };
+        }
+
+        // 3. 台湾居民来往大陆通行证 (台胞证，8位数字脱敏)
+        if (sfzjh.length === 8 && /^\d{2}\*{4}\d{2}$/.test(sfzjh)) {
+            return {
+                type: '台湾通行证',
+                province: '台湾',
+                gender: '未知' // 台胞证号码不包含性别信息
+            };
+        }
+        return null;
+    },
+
     syncToken() {
         if (location.host !== 'ecampus.nwpu.edu.cn') return;
         const checkAndSave = () => {
             const token = localStorage.getItem('token');
-            if (token) {
-                // 只要获取到token，就强制更新存储，确保是最新的
-                GM_setValue(this.STORAGE_KEY, token);
-            }
+            if (token) GM_setValue(this.STORAGE_KEY, token);
         };
-        // 立即执行一次
         checkAndSave();
-        // 稍微延时再执行一次，确保 iframe 加载完全
         setTimeout(checkAndSave, 500);
         setTimeout(checkAndSave, 2000);
     },
 
-    // 2. 打开界面的主入口
     openModal() {
         Logger.log('2.12', "初始化人员信息检索");
-        // 先检查本地是否有 Token
         const token = GM_getValue(this.STORAGE_KEY);
-
-        // === 分支 A: 有 Token，直接打开界面 ===
         if (token) {
             if (document.getElementById('gm-person-search-overlay')) return;
             this.injectStyles();
@@ -5267,40 +6064,29 @@ const PersonnelSearch = {
             this.resetState();
             return;
         }
-
-        // === 分支 B: 无 Token，启动后台静默同步 ===
         this._startSilentSync();
     },
 
-    // 内部方法：执行静默同步
     _startSilentSync() {
-        // 1. 显示提示
         this._showToast("正在后台获取授权，请稍候...");
-
-        // 2. 创建隐形 iframe
         const iframe = document.createElement('iframe');
-        iframe.src = 'https://ecampus.nwpu.edu.cn'; // 目标地址
+        iframe.src = 'https://ecampus.nwpu.edu.cn';
         iframe.style.display = 'none';
         iframe.id = 'gm-sync-iframe-worker';
         document.body.appendChild(iframe);
 
-        // 3. 轮询检测 Token 是否到位
         let attempts = 0;
-        const maxAttempts = 15; // 约 7.5 秒超时
-
+        const maxAttempts = 15;
         const timer = setInterval(() => {
             const newToken = GM_getValue(this.STORAGE_KEY);
             if (newToken) {
-                // [成功] 拿到 Token 了！
                 clearInterval(timer);
                 this._cleanupSync();
                 this._showToast("授权成功！正在打开界面...", 1000);
-                setTimeout(() => this.openModal(), 500); // 递归调用打开界面
+                setTimeout(() => this.openModal(), 500);
             } else {
-                // [等待] 还没拿到...
                 attempts++;
                 if (attempts >= maxAttempts) {
-                    // [超时] 可能是没登录，或者网络太慢
                     clearInterval(timer);
                     this._cleanupSync();
                     this._removeToast();
@@ -5309,27 +6095,24 @@ const PersonnelSearch = {
                     }
                 }
             }
-        }, 500); // 每 500ms 检查一次
+        }, 500);
     },
 
-    // 辅助：清理同步用的临时元素
     _cleanupSync() {
         const frame = document.getElementById('gm-sync-iframe-worker');
         if (frame) frame.remove();
     },
 
-    // 辅助：显示 Toast 提示
     _showToast(msg, duration = 0) {
         let toast = document.getElementById('gm-search-toast');
         if (!toast) {
             toast = document.createElement('div');
             toast.id = 'gm-search-toast';
-            toast.style.cssText = 'position:fixed; top:20%; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.75); color:white; padding:12px 24px; border-radius:30px; font-size:14px; z-index:100020; transition:opacity 0.3s; box-shadow:0 4px 15px rgba(0,0,0,0.2); pointer-events:none;';
+            toast.style.cssText = 'position:fixed; top:20%; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.75); color:white; padding:12px 24px; border-radius:30px; font-size:14px; z-index:100020; transition:opacity 0.3s; box-shadow:0 4px 15px rgba(0,0,0,0.2); pointer-events:none; font-family: "PingFang SC", "Microsoft YaHei", sans-serif;';
             document.body.appendChild(toast);
         }
         toast.innerText = msg;
         toast.style.opacity = '1';
-
         if (duration > 0) {
             setTimeout(() => {
                 toast.style.opacity = '0';
@@ -5343,45 +6126,59 @@ const PersonnelSearch = {
         if(toast) toast.remove();
     },
 
-    // 3. 注入样式 (含黑白大号学号样式)
     injectStyles() {
         if (document.getElementById('gm-person-search-style')) return;
         const style = document.createElement('style');
         style.id = 'gm-person-search-style';
         style.textContent = `
-            .gm-modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.6); z-index: 10005; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
-            .gm-modal-content { background-color: #fff; border-radius: 6px; width: 95%; max-width: 1200px; height: 90vh; max-height: 950px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; overflow: hidden; font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; animation: gmFadeIn 0.2s ease-out; }
-            @keyframes gmFadeIn { from { opacity: 0; transform: scale(0.99); } to { opacity: 1; transform: scale(1); } }
-            .gm-modal-header { padding: 0 20px; border-bottom: 1px solid #eee; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; height: 50px; }
-            .gm-modal-title { font-size: 16px; font-weight: bold; color: #333; display: flex; align-items: center; gap: 8px; }
-            .gm-modal-close { border: none; background: none; font-size: 24px; color: #999; cursor: pointer; padding: 0 10px; display:flex; align-items:center; }
+            .gm-modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.55); backdrop-filter: blur(4px); z-index: 10005; display: flex; align-items: center; justify-content: center; animation: gmFadeIn 0.2s ease-out;}
+            .gm-modal-content { background-color: #fff; border-radius: 12px; width: 880px; max-width: 95%; height: 75vh; max-height: 850px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; overflow: hidden; font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif; }
+            .gm-modal-header { padding: 18px 24px; border-bottom: 1px solid #ebeef5; background: #fff; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+            .gm-modal-title { font-size: 19px; font-weight: 600; color: #2c3e50; display: flex; align-items: center; gap: 10px; letter-spacing: 0.5px;}
+            .gm-modal-close { border: none; background: transparent; font-size: 26px; color: #909399; cursor: pointer; padding: 0; line-height: 1; transition: color 0.2s; font-family: Arial, sans-serif;}
+            .gm-modal-close:hover { color: #f56c6c; }
 
-            .gm-ps-body { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 0 !important; }
-            .gm-ps-search-bar { padding: 15px 20px; background: #fff; border-bottom: 1px solid #ebeef5; display: flex; gap: 10px; flex-shrink: 0; }
-            .gm-ps-input { flex: 1; padding: 8px 12px; border: 1px solid #dcdfe6; border-radius: 4px; outline: none; font-size: 14px; transition: border-color 0.2s; color: #606266; }
-            .gm-ps-input:focus { border-color: #409EFF; }
-            .gm-ps-btn { padding: 8px 20px; background: #409EFF; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s; }
+            .gm-ps-body { display: flex; flex-direction: row; height: 100%; overflow: hidden; padding: 0 !important; background: #fff;}
+            .gm-ps-left { width: 340px; display: flex; flex-direction: column; border-right: 1px solid #ebeef5; background: #fafafa; flex-shrink: 0;}
+            .gm-ps-right { flex: 1; display: flex; align-items: center; justify-content: center; background: #f5f7fa; position: relative; overflow: hidden;}
+
+            .gm-ps-search-box { padding: 16px; background: #fff; border-bottom: 1px solid #ebeef5; box-shadow: 0 2px 10px rgba(0,0,0,0.02); z-index: 2;}
+            .gm-ps-search-bar { display: flex; gap: 10px; }
+            .gm-ps-input { flex: 1; padding: 10px 14px; border: 1px solid #dcdfe6; border-radius: 6px; outline: none; font-size: 14px; transition: all 0.2s; color: #303133; width: 100%; box-sizing: border-box;}
+            .gm-ps-input:focus { border-color: #409EFF; box-shadow: 0 0 0 2px rgba(64,158,255,0.1);}
+            .gm-ps-btn { padding: 0 18px; background: #409EFF; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s; white-space: nowrap;}
             .gm-ps-btn:hover { background: #66b1ff; }
 
             .gm-ps-list-container { flex: 1; overflow-y: auto; padding: 0; position: relative; }
-            .gm-ps-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-            .gm-ps-table th { position: sticky; top: 0; background: #f8f9fa; color: #606266; font-weight: bold; padding: 12px 15px; text-align: left; border-bottom: 1px solid #ebeef5; z-index: 10; }
-            .gm-ps-table td { padding: 12px 15px; border-bottom: 1px solid #ebeef5; color: #606266; vertical-align: middle; }
-            .gm-ps-table tr:hover { background-color: #f5f7fa; }
+            .gm-ps-list-container::-webkit-scrollbar { width: 6px; }
+            .gm-ps-list-container::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 3px; }
 
-            /* 学号样式：黑白、加大、加粗 */
-            .gm-ps-tag {
-                background: #f0f0f0;
-                color: #000000;
-                border: 1px solid #bbb;
-                padding: 6px 10px;
-                border-radius: 4px;
-                font-family: Consolas, monospace;
-                font-size: 15px;
-                font-weight: bold;
-                letter-spacing: 0.5px;
-            }
-            .gm-ps-loader { padding: 20px; text-align: center; color: #909399; font-size: 13px; }
+            .gm-ps-list-item { padding: 15px 20px; cursor: pointer; border-bottom: 1px solid #ebeef5; transition: all 0.2s; background: #fff; display: flex; flex-direction: column; gap: 8px; position: relative;}
+            .gm-ps-list-item:hover { background: #f0f7ff; }
+            .gm-ps-list-item.active { background: #ecf5ff; }
+            .gm-ps-list-item.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #409EFF; }
+            .gm-ps-item-name { font-size: 16px; font-weight: 600; color: #2c3e50; display: flex; justify-content: space-between; align-items: center; letter-spacing: 0.5px;}
+            .gm-ps-item-id { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13.5px; color: #8c939d; letter-spacing: 0.8px;}
+            .gm-ps-loader { padding: 24px; text-align: center; color: #909399; font-size: 14px; }
+
+            .gm-ps-card { background: #fff; width: 380px; border-radius: 12px; box-shadow: 0 16px 36px rgba(0,0,0,0.08); overflow: hidden; display: none; flex-direction: column; border: 1px solid #ebeef5;}
+            .gm-ps-card.show { display: flex; animation: gmFadeInUp 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.28); }
+            .gm-ps-card-header { background: linear-gradient(135deg, #409EFF, #73bfff); height: 100px; position: relative; transition: background 0.5s ease;}
+            .gm-ps-avatar { width: 80px; height: 80px; border-radius: 50%; background: #fff; border: 4px solid #fff; position: absolute; bottom: -40px; left: 28px; box-shadow: 0 6px 16px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; font-size: 34px; color: #409EFF; font-weight: bold; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; transition: color 0.5s ease;}
+            .gm-ps-card-body { padding: 56px 28px 32px 28px; }
+
+            .gm-ps-info-row { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px dashed #ebeef5; }
+            .gm-ps-info-row:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+
+            /* 新增：两列网格布局，用于展示性别和籍贯等简短信息 */
+            .gm-ps-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px dashed #ebeef5; }
+            .gm-ps-info-col { display: flex; flex-direction: column; gap: 8px; }
+
+            .gm-ps-info-label { font-size: 13px; color: #909399; font-weight: 500;}
+            .gm-ps-info-value { font-size: 15px; color: #303133; font-weight: 500; letter-spacing: 0.5px;}
+
+            @keyframes gmFadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
+            @keyframes gmFadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         `;
         document.head.appendChild(style);
     },
@@ -5392,31 +6189,75 @@ const PersonnelSearch = {
         overlay.className = 'gm-modal-overlay';
 
         overlay.innerHTML = `
-            <div class="gm-modal-content" style="width: 650px; height: 70vh; max-height: 800px;">
+            <div class="gm-modal-content">
                 <div class="gm-modal-header">
                     <div class="gm-modal-title">
-                        <span style="font-size:18px; margin-right:5px; font-weight:bold;">人员信息检索
+                        <svg viewBox="0 0 24 24" width="22" height="22" stroke="#409EFF" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="10" cy="8" r="5"></circle>
+                            <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                            <line x1="21" y1="21" x2="15" y2="15"></line>
+                        </svg>
+                        人员信息检索
                     </div>
-                    <button class="gm-modal-close" id="gm-ps-close">×</button>
+                    <button class="gm-modal-close" id="gm-ps-close">&times;</button>
                 </div>
                 <div class="gm-modal-body gm-ps-body">
-                    <div class="gm-ps-search-bar">
-                        <input type="text" id="gm-ps-input" class="gm-ps-input" placeholder="输入姓名、学号或工号">
-                        <button id="gm-ps-btn" class="gm-ps-btn">搜索</button>
+
+                    <div class="gm-ps-left">
+                        <div class="gm-ps-search-box">
+                            <div class="gm-ps-search-bar">
+                                <input type="text" id="gm-ps-input" class="gm-ps-input" placeholder="输入姓名、学号或工号">
+                                <button id="gm-ps-btn" class="gm-ps-btn">检索</button>
+                            </div>
+                        </div>
+                        <div class="gm-ps-list-container" id="gm-ps-scroll-area">
+                            <div id="gm-ps-list"></div>
+                            <div id="gm-ps-loader" class="gm-ps-loader">请输入关键词开始搜索</div>
+                        </div>
                     </div>
-                    <div class="gm-ps-list-container" id="gm-ps-scroll-area">
-                        <table class="gm-ps-table">
-                            <thead>
-                                <tr>
-                                    <th width="30%">姓名</th>
-                                    <th width="35%">学号/工号</th>
-                                    <th>学院/单位</th>
-                                </tr>
-                            </thead>
-                            <tbody id="gm-ps-tbody"></tbody>
-                        </table>
-                        <div id="gm-ps-loader" class="gm-ps-loader">请输入关键词开始搜索</div>
+
+                    <div class="gm-ps-right">
+                        <div id="gm-ps-empty-tip" style="color:#a8abb2; font-size:14px; display:flex; flex-direction:column; align-items:center; gap:16px;">
+                            <svg viewBox="0 0 24 24" width="56" height="56" stroke="#dcdfe6" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                            <span>点击左侧列表查看名片详情</span>
+                        </div>
+
+                        <div id="gm-ps-detail-card" class="gm-ps-card">
+                            <div class="gm-ps-card-header" id="gm-ps-card-header-bg">
+                                <div class="gm-ps-avatar" id="gm-ps-card-avatar">A</div>
+                            </div>
+                            <div class="gm-ps-card-body">
+                                <div id="gm-ps-card-name" style="font-size: 24px; font-weight: 600; color: #2c3e50; margin-bottom: 8px; letter-spacing: 1px;">-</div>
+                                <div id="gm-ps-card-id" style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #8c939d; font-size: 15px; margin-bottom: 28px; letter-spacing: 0.8px;">-</div>
+
+                                <!-- 提取的籍贯和性别（双列网格） -->
+                                <div class="gm-ps-info-grid" id="gm-ps-extra-info">
+                                    <div class="gm-ps-info-col">
+                                        <span class="gm-ps-info-label">性别</span>
+                                        <span class="gm-ps-info-value" id="gm-ps-card-gender">-</span>
+                                    </div>
+                                    <div class="gm-ps-info-col">
+                                        <span class="gm-ps-info-label">籍贯</span>
+                                        <span class="gm-ps-info-value" id="gm-ps-card-prov">-</span>
+                                    </div>
+                                </div>
+
+                                <div class="gm-ps-info-row">
+                                    <span class="gm-ps-info-label">所在院系/部门</span>
+                                    <span class="gm-ps-info-value" id="gm-ps-card-dept">-</span>
+                                </div>
+                                <div class="gm-ps-info-row" id="gm-ps-card-type-row">
+                                    <span class="gm-ps-info-label">身份特征</span>
+                                    <span class="gm-ps-info-value" id="gm-ps-card-type">-</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
+
                 </div>
             </div>
         `;
@@ -5443,17 +6284,31 @@ const PersonnelSearch = {
                 if (!this.state.loading && this.state.hasMore) this.fetchData();
             }
         };
+
+        document.getElementById('gm-ps-list').addEventListener('click', (e) => {
+            const itemDiv = e.target.closest('.gm-ps-list-item');
+            if (!itemDiv) return;
+
+            document.querySelectorAll('.gm-ps-list-item').forEach(el => el.classList.remove('active'));
+            itemDiv.classList.add('active');
+
+            const idx = itemDiv.getAttribute('data-idx');
+            const data = this.state.items[idx];
+            if (data) this.showCardDetail(data);
+        });
     },
 
     resetState() {
-        this.state = { page: 1, loading: false, hasMore: true, keyword: this.state.keyword };
-        const tbody = document.getElementById('gm-ps-tbody');
-        if(tbody) tbody.innerHTML = '';
+        this.state = { page: 1, loading: false, hasMore: true, keyword: this.state.keyword, items: [] };
+        const listDiv = document.getElementById('gm-ps-list');
+        if(listDiv) listDiv.innerHTML = '';
         const loader = document.getElementById('gm-ps-loader');
         if(loader) {
             loader.style.display = 'block';
-            loader.innerText = this.state.keyword ? '正在搜索...' : '请输入关键词';
+            loader.innerText = this.state.keyword ? '正在检索数据库...' : '请输入关键词';
         }
+        document.getElementById('gm-ps-empty-tip').style.display = 'flex';
+        document.getElementById('gm-ps-detail-card').classList.remove('show');
     },
 
     fetchData() {
@@ -5462,7 +6317,7 @@ const PersonnelSearch = {
 
         this.state.loading = true;
         const loader = document.getElementById('gm-ps-loader');
-        if(loader) loader.innerText = "加载中...";
+        if(loader) loader.innerText = "正在加载数据...";
 
         GM_xmlhttpRequest({
             method: "GET",
@@ -5478,44 +6333,133 @@ const PersonnelSearch = {
 
                         if (resp.data.records.length < 20 || this.state.page * 20 >= total) {
                             this.state.hasMore = false;
-                            if(loader) loader.innerText = `— 已显示全部 ${total} 条结果 —`;
+                            if(loader) loader.innerText = `— 已到底部 (共 ${total} 人) —`;
                         } else {
                             this.state.page++;
                             if(loader) loader.innerText = "向下滚动加载更多...";
                         }
 
                         if (total === 0 && this.state.page === 1) {
-                            if(loader) loader.innerText = "未找到相关人员";
+                            if(loader) loader.innerText = "没有找到匹配的人员";
                         }
                     } else {
-                        // Token失效时，清空存储并重新触发静默同步
-                        if(loader) loader.innerText = "授权过期，正在自动刷新...";
+                        if(loader) loader.innerText = "授权验证已过期，正在自动刷新...";
                         GM_setValue(this.STORAGE_KEY, "");
                         setTimeout(() => this._startSilentSync(), 1000);
                     }
                 } catch (e) {
-                    if(loader) loader.innerText = "解析数据失败";
+                    if(loader) loader.innerText = "解析数据出现异常";
                 }
             },
             onerror: () => {
                 this.state.loading = false;
-                if(loader) loader.innerText = "网络请求失败";
+                if(loader) loader.innerText = "网络请求失败，请检查网络设置";
             }
         });
     },
 
-    renderRows(items) {
-        const tbody = document.getElementById('gm-ps-tbody');
-        if(!tbody) return;
-        items.forEach(item => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td><span style="color:#303133;font-weight:600">${item.xm || '-'}</span></td>
-                <td><span class="gm-ps-tag">${item.gh || '-'}</span></td>
-                <td>${item.yxmc || '-'}</td>
+    renderRows(newRecords) {
+        const listDiv = document.getElementById('gm-ps-list');
+        if(!listDiv) return;
+
+        const startIdx = this.state.items.length;
+        this.state.items = this.state.items.concat(newRecords);
+
+        let html = '';
+        newRecords.forEach((item, i) => {
+            const actualIdx = startIdx + i;
+            const name = item.xm || '未知姓名';
+            const id = item.gh || '未知学号/工号';
+            const dept = item.yxmc || '未知单位';
+
+            const identity = this._inferIdentity(id);
+            const tagHtml = identity.short ? `<span style="font-size:12px; font-weight:normal; color:#909399; background:#f0f2f5; padding:3px 8px; border-radius:4px; letter-spacing:0.5px;">${identity.short}</span>` : '';
+
+            html += `
+                <div class="gm-ps-list-item" data-idx="${actualIdx}">
+                    <div class="gm-ps-item-name">
+                        <span>${name}</span>
+                        ${tagHtml}
+                    </div>
+                    <div class="gm-ps-item-id">ID: ${id}</div>
+                    <div style="font-size:13px; color:#a8abb2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                        ${dept}
+                    </div>
+                </div>
             `;
-            tbody.appendChild(tr);
         });
+
+        listDiv.insertAdjacentHTML('beforeend', html);
+    },
+
+    showCardDetail(data) {
+        const name = data.xm || '未知';
+        const id = data.gh || '未知';
+        const dept = data.yxmc || '未知所属机构';
+        const sfzjh = data.sfzjh || ''; // 获取身份证号
+
+        const identity = this._inferIdentity(id);
+        const parsedIDCard = this._parseIDCard(sfzjh);
+
+        const firstChar = name.substring(0, 1).toUpperCase();
+
+        let hash = 0;
+        for (let i = 0; i < name.length; i++) {
+            hash = name.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        const colorTheme = this.THEME_COLORS[Math.abs(hash) % this.THEME_COLORS.length];
+
+        const avatarEl = document.getElementById('gm-ps-card-avatar');
+        avatarEl.innerText = firstChar;
+        avatarEl.style.color = colorTheme.text;
+
+        const headerEl = document.getElementById('gm-ps-card-header-bg');
+        headerEl.style.background = colorTheme.bg;
+
+        document.getElementById('gm-ps-card-name').innerText = name;
+        document.getElementById('gm-ps-card-id').innerText = `ID: ${id}`;
+        document.getElementById('gm-ps-card-dept').innerText = dept;
+
+        // 动态隐藏/显示“身份证提取信息”行及性别动态排版
+        const extraInfoEl = document.getElementById('gm-ps-extra-info');
+        if (parsedIDCard) {
+            const genderEl = document.getElementById('gm-ps-card-gender');
+            const provEl = document.getElementById('gm-ps-card-prov');
+
+            provEl.innerText = parsedIDCard.province;
+
+            // 核心逻辑：判断性别是否已知
+            if (parsedIDCard.gender && parsedIDCard.gender !== '未知') {
+                // 性别已知：显示双列网格
+                genderEl.innerText = parsedIDCard.gender;
+                genderEl.parentElement.style.display = 'flex';
+                extraInfoEl.style.gridTemplateColumns = '1fr 1fr';
+            } else {
+                // 性别未知（如港澳台通行证）：隐藏性别列，籍贯列占满整行
+                genderEl.parentElement.style.display = 'none';
+                extraInfoEl.style.gridTemplateColumns = '1fr';
+            }
+
+            extraInfoEl.style.display = 'grid'; // 恢复显示整体区块
+        } else {
+            extraInfoEl.style.display = 'none'; // 解析失败或无数据时整体隐藏
+        }
+
+        // 动态隐藏/显示“身份特征”行
+        const typeRowEl = document.getElementById('gm-ps-card-type-row');
+        if (identity.long) {
+            document.getElementById('gm-ps-card-type').innerText = identity.long;
+            typeRowEl.style.display = 'flex';
+        } else {
+            typeRowEl.style.display = 'none';
+        }
+
+        document.getElementById('gm-ps-empty-tip').style.display = 'none';
+
+        const card = document.getElementById('gm-ps-detail-card');
+        card.classList.remove('show');
+        void card.offsetWidth;
+        card.classList.add('show');
     }
 };
 
@@ -5852,33 +6796,46 @@ function cacheCourseTableData() {
 
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.13 我的课表教材信息显示 =-=-=-=-=-=-=-=-=-=-=-=-=
 const TextbookInfoModule = {
-    init() {
-        if (!window.location.href.includes('/student/for-std/course-table')) return;
-        Logger.log('2.13', '课表教材信息模块初始化');
-
-        this.injectStyles();
-        this.interceptNetwork();
+    // 网课平台地址配置
+    PLATFORM_MAP: {
+        '学堂在线': 'https://bknwpu.yuketang.cn/',
+        '中国大学MOOC': 'https://www.icourse163.org/spoc/schoolcloud/index.htm',
+        '超星': 'http://nwpu.mooc.chaoxing.com',
+        'MOOC': 'https://www.icourse163.org/spoc/schoolcloud/index.htm',
+        '智慧树': 'https://www.zhihuishu.com/',
+        '知到': 'https://www.zhihuishu.com/',
+        '学习通': 'https://cx.chaoxing.com/'
     },
 
-    // 1. 拦截课表数据的请求
-    interceptNetwork() {
+    _cachedData: null,
+
+    // 【阶段1】立即执行：挂载网络拦截器 (解决首次加载抓不到包的问题)
+    installHook() {
+        if (unsafeWindow.XMLHttpRequest.prototype._gm_textbook_hooked) return;
+        unsafeWindow.XMLHttpRequest.prototype._gm_textbook_hooked = true;
+
         const _send = unsafeWindow.XMLHttpRequest.prototype.send;
         const _open = unsafeWindow.XMLHttpRequest.prototype.open;
         const that = this;
 
-        // 劫持 open 获取 URL
         unsafeWindow.XMLHttpRequest.prototype.open = function(method, url) {
             this._gm_textbook_url = url;
             return _open.apply(this, arguments);
         };
 
-        // 劫持 send 监听响应
         unsafeWindow.XMLHttpRequest.prototype.send = function(data) {
             this.addEventListener('load', function() {
                 if (this._gm_textbook_url && this._gm_textbook_url.includes('/print-data/')) {
                     try {
                         const responseJson = JSON.parse(this.responseText);
-                        that.processData(responseJson);
+                        // 如果此时 UI 还没初始化（DOM还没ready），就先把数据存起来
+                        if (document.readyState === 'loading' || !document.body) {
+                            Logger.log('2.13', '拦截到数据，页面未就绪，已缓存');
+                            that._cachedData = responseJson;
+                        } else {
+                            // 否则直接处理
+                            that.processData(responseJson);
+                        }
                     } catch (e) {
                         Logger.error('2.13', '解析课表 print-data 失败', e);
                     }
@@ -5886,9 +6843,25 @@ const TextbookInfoModule = {
             }, { once: true });
             return _send.apply(this, arguments);
         };
+        Logger.log('2.13', 'XHR拦截器已立即挂载');
     },
 
-    // 2. 递归提取课程信息
+    // 【阶段2】延迟执行：初始化界面
+    initUI() {
+        if (!window.location.href.includes('/student/for-std/course-table')) return;
+        Logger.log('2.13', 'UI模块初始化');
+
+        this.injectStyles();
+
+        // 检查是否有缓存的数据待处理
+        if (this._cachedData) {
+            Logger.log('2.13', '发现缓存数据，开始渲染...');
+            this.processData(this._cachedData);
+            this._cachedData = null; // 清空缓存
+        }
+    },
+
+    // 递归提取课程信息
     processData(jsonData) {
         const courseMap = new Map();
 
@@ -5897,7 +6870,6 @@ const TextbookInfoModule = {
                 obj.forEach(item => findCourses(item));
             } else if (obj !== null && typeof obj === 'object') {
                 if (obj.course && obj.course.id && obj.course.nameZh) {
-                    // key: id, value: nameZh
                     courseMap.set(obj.course.id, obj.course.nameZh);
                 }
                 for (let key in obj) {
@@ -5911,12 +6883,17 @@ const TextbookInfoModule = {
         if (courseMap.size > 0) {
             Logger.log('2.13', `提取到 ${courseMap.size} 门课程，准备获取教材信息`);
             this.fetchTextbooks(courseMap);
+        } else {
+            Logger.log('2.13', `未能提取到课程信息`);
+            if (window.location.href.includes('/student/for-std/course-table')) {
+                this.renderContainer('当前课表数据为空，未提取到本学期的课程信息。');
+            }
         }
     },
 
-    // 3. 并发获取教材详情页面并解析
+    // 并发获取教材详情页面并解析
     async fetchTextbooks(courseMap) {
-        this.renderContainer('正在努力获取全本学期课程的教材信息，请稍候...');
+        this.renderContainer('正在努力获取本学期课程的教材与网课信息，请稍候...');
 
         const allTextbooks = [];
         const promises = [];
@@ -5927,21 +6904,40 @@ const TextbookInfoModule = {
                 .then(html => {
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(html, "text/html");
-                    const rows = doc.querySelectorAll('.textbook-table tbody tr');
 
+                    let isOnlineCourse = false;
+                    let platformName = '';
+
+                    const baseItems = doc.querySelectorAll('.base-info-item');
+                    baseItems.forEach(item => {
+                        const labelEl = item.querySelector('.base-info-label');
+                        const valueEl = item.querySelector('.base-info-value');
+                        if (labelEl && valueEl) {
+                            const label = labelEl.innerText.trim();
+                            const value = valueEl.innerText.trim();
+                            if (label === '课程负责人' && value.includes('在线开放课程')) isOnlineCourse = true;
+                            if (label === '平台链接') platformName = value;
+                        }
+                    });
+
+                    if (isOnlineCourse) {
+                        allTextbooks.push({
+                            courseId: courseId, courseName: courseName, isOnline: true,
+                            platformName: platformName || '未知平台',
+                            name: '-', author: '-', isbn: '-', publisher: '-', edition: '-', pubDate: '-'
+                        });
+                        return;
+                    }
+
+                    const rows = doc.querySelectorAll('.textbook-table tbody tr');
                     rows.forEach(row => {
                         const tds = row.querySelectorAll('td');
                         if (tds.length === 0) return;
-
-                        // 处理存在 rowspan 的列差情况 (一般有8列，如果没有类型列就是7列)
                         const offset = tds.length >= 8 ? 2 : 1;
-
-                        // 防止越界报错
                         if (tds.length < 6) return;
 
                         allTextbooks.push({
-                            courseId: courseId, // 关键：保存 courseId 用于跳转
-                            courseName: courseName,
+                            courseId: courseId, courseName: courseName, isOnline: false,
                             name: tds[offset] ? tds[offset].innerText.trim() : '-',
                             author: tds[offset + 1] ? tds[offset + 1].innerText.trim() : '-',
                             isbn: tds[offset + 2] ? tds[offset + 2].innerText.trim() : '-',
@@ -5952,7 +6948,7 @@ const TextbookInfoModule = {
                     });
                 })
                 .catch(err => {
-                    Logger.warn('2.13', `获取 ${courseName} 教材失败`, err);
+                    Logger.warn('2.13', `获取 ${courseName} 信息失败`, err);
                 });
             promises.push(p);
         }
@@ -5961,7 +6957,7 @@ const TextbookInfoModule = {
         this.renderTable(allTextbooks);
     },
 
-    // 4. 注入UI样式
+    // 注入UI样式
     injectStyles() {
         if (document.getElementById('gm-textbook-style')) return;
         const style = document.createElement('style');
@@ -5990,57 +6986,52 @@ const TextbookInfoModule = {
             .gm-textbook-course { font-weight: bold; color: #409EFF; }
             .gm-textbook-course a { color: #409EFF; text-decoration: none; transition: color 0.2s; }
             .gm-textbook-course a:hover { color: #66b1ff; text-decoration: underline; }
+            .gm-online-cell { background: #fdf6ec; color: #e6a23c !important; font-weight: 500; }
+            .gm-online-btn {
+                display: inline-block; padding: 4px 12px; margin-left: 10px;
+                background-color: #409EFF; color: #fff; border-radius: 4px;
+                text-decoration: none; font-size: 12px; transition: background 0.3s;
+            }
+            .gm-online-btn:hover { background-color: #66b1ff; color: #fff; text-decoration: none;}
         `;
         document.head.appendChild(style);
     },
 
-    // 5. 渲染基础容器
+    // 渲染基础容器
     renderContainer(msg) {
         let container = document.getElementById('gm-textbook-container');
         if (!container) {
             container = document.createElement('div');
             container.id = 'gm-textbook-container';
             container.className = 'gm-textbook-wrapper';
-
-            // 尝试将其挂载到页面的主内容区底部
             const target = document.querySelector('.main-content') || document.querySelector('#app') || document.body;
             target.appendChild(container);
         }
-
         container.innerHTML = `
-            <div class="gm-textbook-title">本学期课程教材清单</div>
+            <div class="gm-textbook-title">本学期课程教材与网课清单</div>
             <div class="gm-textbook-empty">${msg}</div>
         `;
     },
 
-    // 6. 渲染最终表格
+    // 渲染最终表格
     renderTable(dataList) {
-        const container = document.getElementById('gm-textbook-container');
-        if (!container) return;
-
         if (dataList.length === 0) {
-            container.innerHTML = `
-                <div class="gm-textbook-title">本学期课程教材清单</div>
-                <div class="gm-textbook-empty">本学期的所有课程目前均未在教务系统中登记教材信息。</div>
-            `;
+            this.renderContainer('本学期的所有课程目前均未在教务系统中登记教材信息。');
             return;
         }
 
-        // 去重
         const uniqueKeys = new Set();
         const finalData = [];
         dataList.forEach(item => {
-            const key = `${item.courseName}-${item.isbn}-${item.name}`;
+            const key = item.isOnline ? `ONLINE-${item.courseId}` : `${item.courseName}-${item.isbn}-${item.name}`;
             if (!uniqueKeys.has(key)) {
                 uniqueKeys.add(key);
                 finalData.push(item);
             }
         });
 
-        // 按课程名排序，确保同一课程排在一起
         finalData.sort((a, b) => a.courseName.localeCompare(b.courseName));
 
-        // 统计每门课程有多少本教材，用于 rowspan 合并单元格
         const courseCountMap = {};
         finalData.forEach(item => {
             courseCountMap[item.courseName] = (courseCountMap[item.courseName] || 0) + 1;
@@ -6052,47 +7043,72 @@ const TextbookInfoModule = {
         finalData.forEach(tb => {
             rowsHtml += `<tr>`;
 
-            // 如果是该课程的第一本书，输出带有 rowspan 的课程名单元格
             if (tb.courseName !== currentCourse) {
                 currentCourse = tb.courseName;
                 const courseUrl = `https://jwxt.nwpu.edu.cn/student/for-std/lesson-search/info/${tb.courseId}`;
                 rowsHtml += `<td rowspan="${courseCountMap[currentCourse]}" class="gm-textbook-course">
-                                <a href="${courseUrl}" target="_blank" title="在新标签页中查看课程详情">${tb.courseName}</a>
+                                <a href="${courseUrl}" target="_blank" title="查看课程详情">${tb.courseName}</a>
                              </td>`;
             }
 
-            rowsHtml += `
+            if (tb.isOnline) {
+                let targetUrl = '';
+                for (const [key, url] of Object.entries(this.PLATFORM_MAP)) {
+                    if (tb.platformName.includes(key)) { targetUrl = url; break; }
+                }
+
+                const platformDisplay = tb.platformName || "在线平台";
+                const linkHtml = targetUrl
+                    ? `<a href="${targetUrl}" target="_blank" class="gm-online-btn">跳转至 ${platformDisplay}</a>`
+                    : `<span style="margin-left:10px; color:#999; font-size:12px;">(暂无跳转链接)</span>`;
+
+                rowsHtml += `
+                    <td colspan="6" class="gm-online-cell">
+                        <span style="margin-right:8px;">☁在线开放课程</span>
+                        <span>平台：${platformDisplay}</span>
+                        ${linkHtml}
+                    </td>
+                </tr>`;
+            } else {
+                rowsHtml += `
                     <td>${tb.name}</td>
                     <td>${tb.author}</td>
                     <td>${tb.publisher}</td>
                     <td>${tb.isbn}</td>
                     <td>${tb.edition}</td>
                     <td>${tb.pubDate}</td>
-                </tr>
-            `;
+                </tr>`;
+            }
         });
 
-        container.innerHTML = `
-            <div class="gm-textbook-title">本学期课程教材清单</div>
-            <table class="gm-textbook-table">
-                <thead>
-                    <tr>
-                        <th width="20%">课程名称</th>
-                        <th width="20%">教材名称</th>
-                        <th width="17%">作者</th>
-                        <th width="15%">出版社</th>
-                        <th width="10%">ISBN/编号</th>
-                        <th width="5%">版次</th>
-                        <th width="8%">出版年月</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${rowsHtml}
-                </tbody>
-            </table>
-        `;
+        const container = document.getElementById('gm-textbook-container');
+        if (container) {
+            container.innerHTML = `
+                <div class="gm-textbook-title">本学期课程教材与网课清单</div>
+                <table class="gm-textbook-table">
+                    <thead>
+                        <tr>
+                            <th width="20%">课程名称</th>
+                            <th width="20%">教材名称 / 平台信息</th>
+                            <th width="17%">作者</th>
+                            <th width="15%">出版社</th>
+                            <th width="10%">ISBN/编号</th>
+                            <th width="5%">版次</th>
+                            <th width="8%">出版年月</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rowsHtml}
+                    </tbody>
+                </table>
+            `;
+        }
     }
 };
+
+try {
+    TextbookInfoModule.installHook();
+} catch(e) { console.error(e); }
 
 // --- 3. 脚本主入口 (路由分发) ---
 
@@ -6109,10 +7125,12 @@ function runMainFeatures() {
         return;
     }
 
-    // 门户(ecampus) Token同步
-    // 如果在门户网站，只运行Token同步，不运行其他教务逻辑
+    // 门户(ecampus) 挂载与同步
     if (location.host === 'ecampus.nwpu.edu.cn') {
         PersonnelSearch.syncToken();
+        if (window.top === window.self && window.location.pathname === '/main.html') {
+            initializeHomePageFeatures();
+        }
         return;
     }
 
@@ -6223,7 +7241,7 @@ function runMainFeatures() {
         }
 
         // 教材信息显示（官方功能 2.13）
-        TextbookInfoModule.init();
+        TextbookInfoModule.initUI();
 
         // 兜底：如果课表页面意外成为顶层窗口（如旧版跳转导致框架被破坏），
         // 也要创建悬浮球，避免插件图标消失
@@ -6232,7 +7250,32 @@ function runMainFeatures() {
         }
     }
 
-    // 6. 顶层主页
+    // 6. 教师主页跨标签页自动触发搜索
+    else if (href.includes('teacher.nwpu.edu.cn/search')) {
+        const searchName = GM_getValue('gm_cross_search_name');
+        if (searchName) {
+            GM_setValue('gm_cross_search_name', '');
+
+            const autoSearch = () => {
+                const input = document.getElementById('sea');
+                const btn = document.querySelector('.dyym2_btn');
+                if (input && btn) {
+                    input.value = searchName;
+                    btn.click();
+                }
+            };
+            let retryCount = 0;
+            const timer = setInterval(() => {
+                if (document.getElementById('sea') || retryCount > 50) {
+                    clearInterval(timer);
+                    autoSearch();
+                }
+                retryCount++;
+            }, 100);
+        }
+    }
+
+    // 7. 顶层主页
     else if (window.top === window.self) {
         initializeHomePageFeatures();
         // 延迟启动后台控制器
@@ -6242,9 +7285,10 @@ function runMainFeatures() {
     }
 }
 
-    if (document.readyState === 'loading') {
+if (document.readyState === 'loading') {
         window.addEventListener('DOMContentLoaded', runMainFeatures);
-    } else {
+    }
+else {
         runMainFeatures();
     }
 
