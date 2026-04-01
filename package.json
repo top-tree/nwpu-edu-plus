@@ -13,6 +13,9 @@
       "**/tests/**/*.test.js"
     ],
     "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "main.user.js"
+    ],
     "verbose": true
   },
   "repository": {

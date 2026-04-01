@@ -8,17 +8,16 @@
  * 4. 已在课表页面时直接点击"全部课程"
  */
 
-const { createMockEnv, createElement, extractFunction, loadFunctionInEnv, SOURCE_CODE } = require('./setup');
+const { createMockEnv, createElement, loadFunctionByName, SOURCE_CODE } = require('./setup');
 
 // 提取函数源码
-const funcSource = extractFunction(SOURCE_CODE, 'navigateToCourseTablePage');
-
 describe('navigateToCourseTablePage', () => {
 
     test('源码提取成功', () => {
-        expect(funcSource).not.toBeNull();
-        expect(funcSource).toContain('navigateToCourseTablePage');
-        expect(funcSource).toContain('courseTableLink');
+        const loaded = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', createMockEnv(), {}, true);
+        expect(loaded).not.toBeNull();
+        expect(SOURCE_CODE).toContain('navigateToCourseTablePage');
+        expect(SOURCE_CODE).toContain('courseTableLink');
     });
 
     test('策略1：找到菜单栏 <a href=".../course-table"> 链接时应点击它', () => {
@@ -34,7 +33,7 @@ describe('navigateToCourseTablePage', () => {
             elements: [menuLink],
         });
 
-        const fn = loadFunctionInEnv(env, funcSource, 'navigateToCourseTablePage');
+        const fn = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', env);
         fn.call(env.window);
 
         expect(clickSpy).toHaveBeenCalledTimes(1);
@@ -57,7 +56,7 @@ describe('navigateToCourseTablePage', () => {
             elements: [menuLink],
         });
 
-        const fn = loadFunctionInEnv(env, funcSource, 'navigateToCourseTablePage');
+        const fn = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', env);
         fn.call(env.window);
 
         expect(clickSpy).toHaveBeenCalledTimes(1);
@@ -79,7 +78,7 @@ describe('navigateToCourseTablePage', () => {
             elements: [contentIframe],
         });
 
-        const fn = loadFunctionInEnv(env, funcSource, 'navigateToCourseTablePage');
+        const fn = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', env);
         fn.call(env.window);
 
         expect(contentIframe.src).toContain('/student/for-std/course-table');
@@ -110,7 +109,7 @@ describe('navigateToCourseTablePage', () => {
             elements: [gmIframe, realIframe],
         });
 
-        const fn = loadFunctionInEnv(env, funcSource, 'navigateToCourseTablePage');
+        const fn = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', env);
         fn.call(env.window);
 
         expect(gmIframe.src).not.toContain('/student/for-std/course-table');
@@ -123,7 +122,7 @@ describe('navigateToCourseTablePage', () => {
             elements: [],
         });
 
-        const fn = loadFunctionInEnv(env, funcSource, 'navigateToCourseTablePage');
+        const fn = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', env);
         fn.call(env.window);
 
         expect(env.window.location.href).toBe('https://jwxt.nwpu.edu.cn/student/for-std/course-table');
@@ -148,7 +147,7 @@ describe('navigateToCourseTablePage', () => {
             elements: [allCoursesBtn, overlay],
         });
 
-        const fn = loadFunctionInEnv(env, funcSource, 'navigateToCourseTablePage');
+        const fn = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', env);
         fn.call(env.window);
 
         expect(clickSpy).toHaveBeenCalledTimes(1);
@@ -165,7 +164,7 @@ describe('navigateToCourseTablePage', () => {
             elements: [menuLink],
         });
 
-        const fn = loadFunctionInEnv(env, funcSource, 'navigateToCourseTablePage');
+        const fn = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', env);
         const before = Date.now();
         fn.call(env.window);
         const after = Date.now();
@@ -184,7 +183,7 @@ describe('navigateToCourseTablePage', () => {
             elements: [menuLink, overlay],
         });
 
-        const fn = loadFunctionInEnv(env, funcSource, 'navigateToCourseTablePage');
+        const fn = loadFunctionByName(SOURCE_CODE, 'navigateToCourseTablePage', env);
         fn.call(env.window);
 
         expect(overlay._removed).toBe(true);

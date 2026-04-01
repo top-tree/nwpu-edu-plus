@@ -9,7 +9,7 @@
  * 5. 入口点测试
  */
 
-const { createMockEnv, createElement, extractFunction, loadFunctionInEnv, SOURCE_CODE } = require('./setup');
+const { createMockEnv, createElement, extractFunction, loadFunctionByName, SOURCE_CODE } = require('./setup');
 
 // 提取函数源码
 const funcSourceImmediate = extractFunction(SOURCE_CODE, 'handleGpaEstimateClickImmediate');
@@ -73,7 +73,7 @@ describe('GPA 预测 - formatCacheAge 缓存时间格式化', () => {
 
     test('formatCacheAge 不到1分钟', () => {
         const env = createMockEnv();
-        const fn = loadFunctionInEnv(env, funcSourceFormatCache, 'formatCacheAge');
+        const fn = loadFunctionByName(SOURCE_CODE, 'formatCacheAge', env);
         
         const result = fn.call(env.window, 30000); // 30秒
         expect(result).toBe('不到 1 分钟');
@@ -81,7 +81,7 @@ describe('GPA 预测 - formatCacheAge 缓存时间格式化', () => {
 
     test('formatCacheAge 几分钟', () => {
         const env = createMockEnv();
-        const fn = loadFunctionInEnv(env, funcSourceFormatCache, 'formatCacheAge');
+        const fn = loadFunctionByName(SOURCE_CODE, 'formatCacheAge', env);
         
         const result = fn.call(env.window, 300000); // 5分钟
         expect(result).toBe('5 分钟');
@@ -89,7 +89,7 @@ describe('GPA 预测 - formatCacheAge 缓存时间格式化', () => {
 
     test('formatCacheAge 几小时', () => {
         const env = createMockEnv();
-        const fn = loadFunctionInEnv(env, funcSourceFormatCache, 'formatCacheAge');
+        const fn = loadFunctionByName(SOURCE_CODE, 'formatCacheAge', env);
         
         const result = fn.call(env.window, 7200000); // 2小时
         expect(result).toBe('2 小时');
@@ -97,7 +97,7 @@ describe('GPA 预测 - formatCacheAge 缓存时间格式化', () => {
 
     test('formatCacheAge 几天', () => {
         const env = createMockEnv();
-        const fn = loadFunctionInEnv(env, funcSourceFormatCache, 'formatCacheAge');
+        const fn = loadFunctionByName(SOURCE_CODE, 'formatCacheAge', env);
         
         const result = fn.call(env.window, 172800000); // 2天
         expect(result).toBe('2 天');

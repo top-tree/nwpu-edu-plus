@@ -41,8 +41,10 @@ const GRADE_MAPPING_CONFIG = {
 // ============================================================
 (function () {
     'use strict';
+const IS_TEST_ENV = typeof globalThis !== 'undefined' && !!globalThis.__NWPU_EDU_PLUS_TEST__;
 
 // =============== 0.0 拦截浏览器的异常请求，优化网页加载速度 ===============
+if (!IS_TEST_ENV) {
 try {
         const BAD_KEY = 'burp';
 
@@ -80,6 +82,7 @@ try {
     } catch (e) {
         console.error('[NWPU-Enhanced] 拦截器初始化异常', e);
     }
+}
 
 // =-=-=-=-=-=-=-=-=-=-=-=-= 0. 基础工具与日志系统 =-=-=-=-=-=-=-=-=-=-=-=-=
 
@@ -111,12 +114,23 @@ const CONSTANTS = {
     API_PERSONNEL: 'https://electronic-signature.nwpu.edu.cn/api/local-user/page',
     API_MY_SCHEDULE: 'https://jwxt.nwpu.edu.cn/student/for-std/course-schedule/getData',
     PAGE_COURSE_TABLE: 'https://jwxt.nwpu.edu.cn/student/for-std/course-table',
+    PAGE_TEACHER_SEARCH: 'https://teacher.nwpu.edu.cn/search/syss/.html',
 
     // GPA 预测
     GPA_ESTIMATE_KEY: 'jwxt_gpa_estimate_data',
     
     // 课表缓存
-    COURSE_TABLE_CACHE_KEY: 'jwxt_course_table_cache'
+    COURSE_TABLE_CACHE_KEY: 'jwxt_course_table_cache',
+    COURSE_TABLE_AUTO_FETCH_KEY: 'jwxt_auto_fetch_course_table',
+    COURSE_TABLE_AUTO_FETCH_WINDOW_MS: 30000,
+    COURSE_TABLE_CACHE_DELAY_MS: 1500,
+    COURSE_TABLE_SEMESTER_BIND_DELAY_MS: 2000,
+    COURSE_TABLE_SEMESTER_CACHE_DELAY_MS: 1000,
+    COURSE_TABLE_OBSERVER_START_DELAY_MS: 2000,
+    COURSE_TABLE_OBSERVER_TIMEOUT_MS: 60000,
+    TEACHER_SEARCH_NAME_KEY: 'gm_cross_search_name',
+    TEACHER_SEARCH_RETRY_INTERVAL: 100,
+    TEACHER_SEARCH_MAX_RETRIES: 300
 };
 
 /**
@@ -381,6 +395,129 @@ const FriendlyLinks = {
     show: function() { this.initModal(); document.getElementById('gm-friendly-links-modal').style.display = 'flex'; }
 };
 
+function buildGreasyForkFallbackUrls(targetUrl) {
+    return [
+        targetUrl,
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
+    ];
+}
+
+function requestTextWithFallback(urls, validateResponse, options) {
+    options = options || {};
+    const {
+        timeout = 3500,
+        onSuccess = () => {},
+        onFailure = () => {}
+    } = options;
+
+    let currentTry = 0;
+    const requestNext = () => {
+        if (currentTry >= urls.length) {
+            onFailure();
+            return;
+        }
+
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: urls[currentTry],
+            timeout,
+            onload(res) {
+                if (!validateResponse || validateResponse(res)) {
+                    onSuccess(res, urls[currentTry], currentTry);
+                    return;
+                }
+                currentTry++;
+                requestNext();
+            },
+            onerror() {
+                currentTry++;
+                requestNext();
+            },
+            ontimeout() {
+                currentTry++;
+                requestNext();
+            }
+        });
+    };
+
+    requestNext();
+}
+
+function downloadUserscriptWithFallback(scriptUrl, options) {
+    options = options || {};
+    requestTextWithFallback(
+        buildGreasyForkFallbackUrls(scriptUrl),
+        (res) => res.status === 200 && res.responseText.includes('==/UserScript=='),
+        options
+    );
+}
+
+function isTeacherSite(host = window.location.host) {
+    if (!host) {
+        try {
+            host = new URL(window.location.href).host;
+        } catch (e) {
+            host = '';
+        }
+    }
+    return host === 'teacher.nwpu.edu.cn';
+}
+
+function isTeacherSearchPage(href = window.location.href) {
+    return isTeacherSite() && href.includes('/search');
+}
+
+function getTeacherSearchConfig() {
+    return {
+        pageUrl: CONSTANTS.PAGE_TEACHER_SEARCH || 'https://teacher.nwpu.edu.cn/search/syss/.html',
+        storageKey: CONSTANTS.TEACHER_SEARCH_NAME_KEY || 'gm_cross_search_name',
+        retryInterval: CONSTANTS.TEACHER_SEARCH_RETRY_INTERVAL || 100,
+        maxRetries: CONSTANTS.TEACHER_SEARCH_MAX_RETRIES || 300
+    };
+}
+
+function queueTeacherSearch(name) {
+    if (!name) return;
+    const config = getTeacherSearchConfig();
+    GM_setValue(config.storageKey, name);
+    window.open(config.pageUrl, '_blank');
+}
+
+function trySubmitQueuedTeacherSearch(searchName) {
+    const config = getTeacherSearchConfig();
+    const input = document.getElementById('sea');
+    const button = document.querySelector('.dyym2_btn');
+    if (!input || !button) return false;
+
+    input.value = searchName;
+    button.click();
+    GM_setValue(config.storageKey, '');
+    return true;
+}
+
+function initializeTeacherSearchAutoSubmit() {
+    const config = getTeacherSearchConfig();
+    const searchName = GM_getValue(config.storageKey);
+    if (!searchName) return;
+
+    if (trySubmitQueuedTeacherSearch(searchName)) return;
+
+    let retryCount = 0;
+    const timer = setInterval(() => {
+        retryCount++;
+        if (trySubmitQueuedTeacherSearch(searchName)) {
+            clearInterval(timer);
+            return;
+        }
+
+        if (retryCount >= config.maxRetries) {
+            clearInterval(timer);
+            Logger.warn('教师主页搜索', '搜索页加载超时，已保留待检索教师姓名，可刷新页面后重试');
+        }
+    }, config.retryInterval);
+}
+
 // --- 版本检查器 ---
 const UpdateChecker = {
     check: function(auto = false) {
@@ -388,49 +525,34 @@ const UpdateChecker = {
         if (!auto && btnText) btnText.innerHTML = "正在检查更新...";
 
         const metaUrl = 'https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.meta.js?t=' + Date.now();
-        const urlsToTry = [
-            metaUrl,
-            `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(metaUrl)}`,
-            `https://api.allorigins.win/raw?url=${encodeURIComponent(metaUrl)}`
-        ];
-
-        let currentTry = 0;
-        const requestNext = () => {
-            if (currentTry >= urlsToTry.length) {
-                if (!auto && btnText) btnText.innerHTML = `网络受限，点击重试`;
-                return;
-            }
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: urlsToTry[currentTry],
+        requestTextWithFallback(
+            buildGreasyForkFallbackUrls(metaUrl),
+            (res) => res.status === 200 && /@version\s+([^\s]+)/.test(res.responseText),
+            {
                 timeout: 3500,
-                onload: function(res) {
-                    if (res.status === 200 && res.responseText.includes('@version')) {
-                        try {
-                            const match = res.responseText.match(/@version\s+([^\s]+)/);
-                            if (match && match[1]) {
-                                const latestVersion = match[1];
-                                const currentVersion = typeof GM_info !== 'undefined' ? GM_info.script.version : '1.0.0';
+                onSuccess(res) {
+                    try {
+                        const match = res.responseText.match(/@version\s+([^\s]+)/);
+                        if (match && match[1]) {
+                            const latestVersion = match[1];
+                            const currentVersion = typeof GM_info !== 'undefined' ? GM_info.script.version : '1.0.0';
 
-                                if (UpdateChecker.compareVersion(latestVersion, currentVersion) > 0) {
-                                    if (btnText) btnText.innerHTML = `<span style="color:#F56C6C;font-weight:bold;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:4px;"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>发现新版本 v${latestVersion}</span>`;
-                                    const badge = document.querySelector('.gm-float-ball .gm-badge');
-                                    if (badge) badge.style.display = 'block';
-                                } else {
-                                    if (!auto && btnText) btnText.innerHTML = `已是最新版本 (v${currentVersion})`;
-                                    else if (auto && btnText) btnText.innerHTML = `检查版本更新 (v${currentVersion})`;
-                                }
-                                return;
+                            if (UpdateChecker.compareVersion(latestVersion, currentVersion) > 0) {
+                                if (btnText) btnText.innerHTML = `<span style="color:#F56C6C;font-weight:bold;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:4px;"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>发现新版本 v${latestVersion}</span>`;
+                                const badge = document.querySelector('.gm-float-ball .gm-badge');
+                                if (badge) badge.style.display = 'block';
+                            } else {
+                                if (!auto && btnText) btnText.innerHTML = `已是最新版本 (v${currentVersion})`;
+                                else if (auto && btnText) btnText.innerHTML = `检查版本更新 (v${currentVersion})`;
                             }
-                        } catch(e) {}
-                    }
-                    currentTry++; requestNext();
+                        }
+                    } catch(e) {}
                 },
-                onerror: function() { currentTry++; requestNext(); },
-                ontimeout: function() { currentTry++; requestNext(); }
-            });
-        };
-        requestNext();
+                onFailure() {
+                    if (!auto && btnText) btnText.innerHTML = `网络受限，点击重试`;
+                }
+            }
+        );
     },
     compareVersion: function(v1, v2) {
         const p1 = v1.split('.').map(Number), p2 = v2.split('.').map(Number);
@@ -509,13 +631,9 @@ const UpdateChecker = {
             proxyBtn.style.opacity = '0.7';
 
             const scriptUrl = 'https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.user.js';
-            const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(scriptUrl)}`;
-
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: proxyUrl,
-                onload: (res) => {
-                    if (res.status === 200 && res.responseText.includes('==/UserScript==')) {
+            downloadUserscriptWithFallback(scriptUrl, {
+                timeout: 6000,
+                onSuccess: (res) => {
                         const blob = new Blob([res.responseText], { type: 'text/javascript' });
                         const url = URL.createObjectURL(blob);
                         const a = document.createElement('a');
@@ -529,15 +647,9 @@ const UpdateChecker = {
                         proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>下载完成！请按下方提示操作';
                         proxyBtn.style.background = "#67C23A";
                         tipBox.style.display = "block";
-                    } else {
-                        proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>拉取失败，请重试或尝试原网页';
-                        proxyBtn.style.background = "#F56C6C";
-                        proxyBtn.disabled = false;
-                        proxyBtn.style.opacity = '1';
-                    }
                 },
-                onerror: () => {
-                    proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>网络错误，请重试';
+                onFailure: () => {
+                    proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>拉取失败，请重试或尝试原网页';
                     proxyBtn.style.background = "#F56C6C";
                     proxyBtn.disabled = false;
                     proxyBtn.style.opacity = '1';
@@ -2527,7 +2639,7 @@ function navigateToCourseTablePage() {
     }
     
     // 不在课表页面，执行跳转
-    GM_setValue('jwxt_auto_fetch_course_table', Date.now());
+    GM_setValue(CONSTANTS.COURSE_TABLE_AUTO_FETCH_KEY, Date.now());
     Logger.log('课表获取', '正在跳转到课表页面...');
     
     // 关闭 GPA 预测弹窗
@@ -3891,8 +4003,7 @@ function enhanceTeacherNames(row) {
         a.onclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            GM_setValue('gm_cross_search_name', name);
-            window.open('https://teacher.nwpu.edu.cn/search/syss/.html', '_blank');
+            queueTeacherSearch(name);
         };
         teacherEl.appendChild(a);
 
@@ -7106,11 +7217,204 @@ const TextbookInfoModule = {
     }
 };
 
-try {
-    TextbookInfoModule.installHook();
-} catch(e) { console.error(e); }
+if (!IS_TEST_ENV) {
+    try {
+        TextbookInfoModule.installHook();
+    } catch(e) { console.error(e); }
+}
 
 // --- 3. 脚本主入口 (路由分发) ---
+
+function consumeCourseTableAutoFetchFlag(now = Date.now()) {
+    const autoFetchFlag = GM_getValue(CONSTANTS.COURSE_TABLE_AUTO_FETCH_KEY, 0);
+    const isAutoFetch = autoFetchFlag && (now - autoFetchFlag < CONSTANTS.COURSE_TABLE_AUTO_FETCH_WINDOW_MS);
+
+    if (isAutoFetch) {
+        GM_setValue(CONSTANTS.COURSE_TABLE_AUTO_FETCH_KEY, 0);
+        Logger.log('课表缓存', '检测到自动获取标记，将自动展开全部课程并缓存');
+    }
+
+    return isAutoFetch;
+}
+
+function scheduleCourseTableCache(delay = CONSTANTS.COURSE_TABLE_CACHE_DELAY_MS) {
+    setTimeout(cacheCourseTableData, delay);
+}
+
+function initializeCourseTableCacheOnLoad() {
+    const parseAndCache = () => scheduleCourseTableCache();
+    if (document.readyState === 'complete') {
+        parseAndCache();
+    } else {
+        window.addEventListener('load', parseAndCache);
+    }
+}
+
+function initializeCourseTableSemesterWatcher() {
+    setTimeout(() => {
+        const semesterSelect = document.querySelector('select[id*="semester"], select[name*="semester"]');
+        if (!semesterSelect) return;
+
+        semesterSelect.addEventListener('change', () => {
+            setTimeout(cacheCourseTableData, CONSTANTS.COURSE_TABLE_SEMESTER_CACHE_DELAY_MS);
+        });
+    }, CONSTANTS.COURSE_TABLE_SEMESTER_BIND_DELAY_MS);
+}
+
+function startCourseTableLessonObserver(isAutoFetch) {
+    let hasHandledLessonRows = false;
+    let observerStopTimer = null;
+    const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+            if (mutation.type !== 'childList' || hasHandledLessonRows) continue;
+
+            const lessonRows = document.querySelectorAll('tr.lessonInfo');
+            if (lessonRows.length === 0) continue;
+
+            hasHandledLessonRows = true;
+            observer.disconnect();
+            if (observerStopTimer) clearTimeout(observerStopTimer);
+            Logger.log('课表缓存', '检测到课程列表出现，开始缓存');
+            cacheCourseTableData();
+
+            if (isAutoFetch) {
+                showAutoFetchSuccessToast(lessonRows.length);
+            }
+            return;
+        }
+    });
+
+    setTimeout(() => {
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+        observerStopTimer = setTimeout(
+            () => observer.disconnect(),
+            CONSTANTS.COURSE_TABLE_OBSERVER_TIMEOUT_MS
+        );
+    }, CONSTANTS.COURSE_TABLE_OBSERVER_START_DELAY_MS);
+}
+
+function initializeCourseTableClickWatcher() {
+    document.addEventListener('click', (e) => {
+        const target = e.target;
+        const text = target.textContent || target.innerText || '';
+        if (text.includes('我的课表') || text.includes('全部课程') || text.includes('课程列表')) {
+            Logger.log('课表缓存', `检测到"${text}"按钮点击`);
+            scheduleCourseTableCache();
+        }
+    });
+}
+
+function initializeCourseTablePage() {
+    const isAutoFetch = consumeCourseTableAutoFetchFlag();
+    initializeCourseTableCacheOnLoad();
+    initializeCourseTableSemesterWatcher();
+    startCourseTableLessonObserver(isAutoFetch);
+    initializeCourseTableClickWatcher();
+
+    if (isAutoFetch) {
+        autoClickAllCoursesAndScroll();
+    }
+
+    TextbookInfoModule.initUI();
+
+    if (window.top === window.self) {
+        createFloatingMenu();
+    }
+}
+
+function initializeJwxtHomePage() {
+    initializeHomePageFeatures();
+    setTimeout(() => {
+        BackgroundSyncSystem.initController();
+    }, 5000);
+}
+
+function initializeTeacherSitePage(href = window.location.href) {
+    if (isTeacherSearchPage(href)) {
+        initializeTeacherSearchAutoSubmit();
+    }
+}
+
+function applyTestOverrides(overrides = {}) {
+    if (!IS_TEST_ENV || !overrides) return;
+
+    if (overrides.Logger) Object.assign(Logger, overrides.Logger);
+    if (overrides.BackgroundSyncSystem) Object.assign(BackgroundSyncSystem, overrides.BackgroundSyncSystem);
+    if (overrides.PersonnelSearch) Object.assign(PersonnelSearch, overrides.PersonnelSearch);
+    if (overrides.TextbookInfoModule) Object.assign(TextbookInfoModule, overrides.TextbookInfoModule);
+
+    if (typeof overrides.cacheCourseTableData === 'function') {
+        cacheCourseTableData = overrides.cacheCourseTableData;
+    }
+    if (typeof overrides.showAutoFetchSuccessToast === 'function') {
+        showAutoFetchSuccessToast = overrides.showAutoFetchSuccessToast;
+    }
+    if (typeof overrides.autoClickAllCoursesAndScroll === 'function') {
+        autoClickAllCoursesAndScroll = overrides.autoClickAllCoursesAndScroll;
+    }
+    if (typeof overrides.createFloatingMenu === 'function') {
+        createFloatingMenu = overrides.createFloatingMenu;
+    }
+    if (typeof overrides.initializeHomePageFeatures === 'function') {
+        initializeHomePageFeatures = overrides.initializeHomePageFeatures;
+    }
+    if (typeof overrides.initEvaluationHelper === 'function') {
+        initEvaluationHelper = overrides.initEvaluationHelper;
+    }
+    if (typeof overrides.initLessonSearchPage === 'function') {
+        initLessonSearchPage = overrides.initLessonSearchPage;
+    }
+    if (typeof overrides.enhancePortraitPage === 'function') {
+        enhancePortraitPage = overrides.enhancePortraitPage;
+    }
+    if (typeof overrides.initProgramPageEnhancement === 'function') {
+        initProgramPageEnhancement = overrides.initProgramPageEnhancement;
+    }
+}
+
+function exposeTestExports() {
+    if (!IS_TEST_ENV) return;
+
+    globalThis.__NWPU_EDU_PLUS_TEST_EXPORTS = {
+        CONSTANTS,
+        Logger,
+        BackgroundSyncSystem,
+        PersonnelSearch,
+        TextbookInfoModule,
+        buildGreasyForkFallbackUrls,
+        requestTextWithFallback,
+        downloadUserscriptWithFallback,
+        initializeHomePageFeatures,
+        navigateToCourseTablePage,
+        calculatePredictedGPA,
+        precomputeAllWeightedScores,
+        updateSummaryTilesForPortrait,
+        getPassStatus,
+        createEnhancedOutOfPlanTableForPortrait,
+        autoClickAllCoursesAndScroll,
+        showAutoFetchSuccessToast,
+        isTeacherSite,
+        isTeacherSearchPage,
+        getTeacherSearchConfig,
+        queueTeacherSearch,
+        trySubmitQueuedTeacherSearch,
+        initializeTeacherSearchAutoSubmit,
+        consumeCourseTableAutoFetchFlag,
+        scheduleCourseTableCache,
+        initializeCourseTableCacheOnLoad,
+        initializeCourseTableSemesterWatcher,
+        startCourseTableLessonObserver,
+        initializeCourseTableClickWatcher,
+        initializeCourseTablePage,
+        initializeJwxtHomePage,
+        initializeTeacherSitePage,
+        runMainFeatures,
+        applyTestOverrides,
+    };
+}
 
 function runMainFeatures() {
     const href = window.location.href;
@@ -7164,132 +7468,30 @@ function runMainFeatures() {
 
     // 5. 课表页面 - 缓存课表数据 & 教材信息显示
     else if (href.includes('/student/for-std/course-table')) {
-        // 检查是否是从 GPA 预测页面自动跳转过来的
-        const autoFetchFlag = GM_getValue('jwxt_auto_fetch_course_table', 0);
-        const isAutoFetch = autoFetchFlag && (Date.now() - autoFetchFlag < 30000); // 30秒内有效
-        
-        if (isAutoFetch) {
-            GM_setValue('jwxt_auto_fetch_course_table', 0); // 清除标记
-            Logger.log('课表缓存', '检测到自动获取标记，将自动展开全部课程并缓存');
-        }
-
-        // 等待页面加载完成后解析
-        const parseAndCache = () => {
-            setTimeout(() => {
-                cacheCourseTableData();
-            }, 1500);
-        };
-        if (document.readyState === 'complete') {
-            parseAndCache();
-        } else {
-            window.addEventListener('load', parseAndCache);
-        }
-        
-        // 监听学期切换
-        setTimeout(() => {
-            const semesterSelect = document.querySelector('select[id*="semester"], select[name*="semester"]');
-            if (semesterSelect) {
-                semesterSelect.addEventListener('change', () => {
-                    setTimeout(cacheCourseTableData, 1000);
-                });
-            }
-        }, 2000);
-        
-        // 使用 MutationObserver 监听"全部课程"列表的出现
-        const observer = new MutationObserver((mutations) => {
-            for (const mutation of mutations) {
-                if (mutation.type === 'childList') {
-                    // 检查是否有 lessonInfo 元素出现
-                    const lessonRows = document.querySelectorAll('tr.lessonInfo');
-                    if (lessonRows.length > 0) {
-                        Logger.log('课表缓存', '检测到课程列表出现，开始缓存');
-                        cacheCourseTableData();
-                        
-                        // 如果是自动跳转过来的，缓存完成后显示成功提示
-                        if (isAutoFetch) {
-                            showAutoFetchSuccessToast(lessonRows.length);
-                        }
-                        break;
-                    }
-                }
-            }
-        });
-        
-        // 延迟启动 observer，等页面准备好
-        setTimeout(() => {
-            observer.observe(document.body, {
-                childList: true,
-                subtree: true
-            });
-            // 60秒后停止观察
-            setTimeout(() => observer.disconnect(), 60000);
-        }, 2000);
-        
-        // 监听所有点击事件，当用户点击可能的"我的课表"、"全部课程"按钮时触发缓存
-        document.addEventListener('click', (e) => {
-            const target = e.target;
-            const text = target.textContent || target.innerText || '';
-            if (text.includes('我的课表') || text.includes('全部课程') || text.includes('课程列表')) {
-                Logger.log('课表缓存', `检测到"${text}"按钮点击`);
-                setTimeout(cacheCourseTableData, 1500);
-            }
-        });
-        
-        // 如果是自动跳转，自动点击"全部课程"标签并滚动到底部
-        if (isAutoFetch) {
-            autoClickAllCoursesAndScroll();
-        }
-
-        // 教材信息显示（官方功能 2.13）
-        TextbookInfoModule.initUI();
-
-        // 兜底：如果课表页面意外成为顶层窗口（如旧版跳转导致框架被破坏），
-        // 也要创建悬浮球，避免插件图标消失
-        if (window.top === window.self) {
-            createFloatingMenu();
-        }
+        initializeCourseTablePage();
     }
 
-    // 6. 教师主页跨标签页自动触发搜索
-    else if (href.includes('teacher.nwpu.edu.cn/search')) {
-        const searchName = GM_getValue('gm_cross_search_name');
-        if (searchName) {
-            GM_setValue('gm_cross_search_name', '');
-
-            const autoSearch = () => {
-                const input = document.getElementById('sea');
-                const btn = document.querySelector('.dyym2_btn');
-                if (input && btn) {
-                    input.value = searchName;
-                    btn.click();
-                }
-            };
-            let retryCount = 0;
-            const timer = setInterval(() => {
-                if (document.getElementById('sea') || retryCount > 50) {
-                    clearInterval(timer);
-                    autoSearch();
-                }
-                retryCount++;
-            }, 100);
-        }
+    // 6. 教师站页面
+    else if (isTeacherSite()) {
+        initializeTeacherSitePage(href);
+        return;
     }
 
     // 7. 顶层主页
     else if (window.top === window.self) {
-        initializeHomePageFeatures();
-        // 延迟启动后台控制器
-        setTimeout(() => {
-            BackgroundSyncSystem.initController();
-        }, 5000);
+        initializeJwxtHomePage();
     }
 }
 
-if (document.readyState === 'loading') {
+exposeTestExports();
+
+if (!(IS_TEST_ENV && globalThis.__NWPU_EDU_PLUS_TEST_SKIP_BOOTSTRAP__)) {
+    if (document.readyState === 'loading') {
         window.addEventListener('DOMContentLoaded', runMainFeatures);
     }
-else {
+    else {
         runMainFeatures();
     }
+}
 
 })();
