@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翱翔教务功能加强
 // @namespace    http://tampermonkey.net/
-// @version      1.7.6
+// @version      1.7.7
 // @description  1.提供GPA分析报告；2. 导出课程成绩与教学班排名；3.更好的“学生画像”显示；4.选课助手；5.课程关注与后台同步；6.一键自动评教；7.人员信息检索
 // @author       leamloli
 // @match        https://jwxt.nwpu.edu.cn/*
@@ -24,7 +24,7 @@
 // @require      https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js
 // @homepage     https://greasyfork.org/zh-CN/scripts/524099-%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA
 // ==/UserScript==
-
+    
 // ==================== 用户可配置区域 ====================
 /**
  * @description 中文等级制成绩到百分制分数的映射。
@@ -37,19 +37,19 @@ const GRADE_MAPPING_CONFIG = {
     '及格': 60,
     '不及格': 0
 };
-
+    
 // ============================================================
 (function () {
     'use strict';
-
+    
 // =============== 0.0 拦截浏览器的异常请求，优化网页加载速度 ===============
 try {
         const BAD_KEY = 'burp';
-
+    
         // 1. 劫持 HTMLImageElement 原型链上的 src 属性
         const imageProto = HTMLImageElement.prototype;
         const originalSrcDescriptor = Object.getOwnPropertyDescriptor(imageProto, 'src');
-
+    
         if (originalSrcDescriptor) {
             Object.defineProperty(imageProto, 'src', {
                 get: function() {
@@ -66,7 +66,7 @@ try {
                 enumerable: true
             });
         }
-
+    
         // 2. 劫持 setAttribute 方法
         const originalSetAttribute = Element.prototype.setAttribute;
         Element.prototype.setAttribute = function(name, value) {
@@ -76,13 +76,13 @@ try {
             }
             return originalSetAttribute.apply(this, arguments);
         };
-
+    
     } catch (e) {
         console.error('[NWPU-Enhanced] 拦截器初始化异常', e);
     }
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 0. 基础工具与日志系统 =-=-=-=-=-=-=-=-=-=-=-=-=
-
+    
 // --- 全局常量定义 ---
 const CONSTANTS = {
     CACHE_KEY: 'jwxtEnhancedDataCache',
@@ -93,7 +93,7 @@ const CONSTANTS = {
     SYNC_COOLDOWN_MS: 1 * 60 * 60 * 1000, // 1小时冷却
     GRADES_SNAPSHOT_KEY: 'jwxt_grades_snapshot_v1'//成绩快照存储Key
 };
-
+    
 /**
  * 统一日志输出工具
  * @description 所有控制台输出统一带有 [NWPU-Enhanced] 前缀
@@ -113,7 +113,7 @@ const Logger = {
     error: (module, msg, ...args) => Logger._print(module, msg, 'error', args),
     info: (module, msg, ...args) => Logger._print(module, msg, 'info', args)
 };
-
+    
 // 悬浮球 UI 变量
 let floatBall = null;
 let floatMenu = null;
@@ -122,24 +122,24 @@ let menuGpaBtn = null;
 let menuSyncBtn = null;
 let menuFollowBtn = null;
 let menuHupanBtn = null;
-
+    
 // 功能UI变量
 let semesterCheckboxContainer = null;
 let isDataReady = false;
 let isBackgroundSyncing = false;
-
+    
 // --- 配置管理 ---
 const ConfigManager = {
     get enableExport() { return true; }, // 基础功能始终开启
     get enableGpaReport() { return true; }, // 基础功能始终开启
-
+    
     get enablePortraitEnhancement() { return GM_getValue('enablePortraitEnhancement', true); },
     set enablePortraitEnhancement(val) { GM_setValue('enablePortraitEnhancement', val); },
-
+    
     get enableCourseWatch() { return GM_getValue('enableCourseWatch', true); },
     set enableCourseWatch(val) { GM_setValue('enableCourseWatch', val); }
 };
-
+    
 // --- 常用链接导航 ---
 const FriendlyLinks = {
     categories: [
@@ -149,7 +149,7 @@ const FriendlyLinks = {
             links: [
                 { name: "湖畔资料", url: "http://nwpushare.fun", desc: "西工大课程资料共享平台", bg: "#ecf5ff", color: "#409EFF", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>' },
                 { name: "瓜兵速成指南", url: "https://nwpumanual.angine.tech/", desc: "新生入学问题指南", bg: "#fdf6ec", color: "#E6A23C", svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>' }
-
+    
             ]
         },
         {
@@ -171,10 +171,10 @@ const FriendlyLinks = {
             ]
         }
     ],
-
+    
     initModal: function() {
         if (document.getElementById('gm-friendly-links-modal')) return;
-
+    
         const style = document.createElement('style');
         style.textContent = `
             .gm-fl-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.55); backdrop-filter: blur(4px); z-index: 100005; display: flex; justify-content: center; align-items: center; animation: gmLinkFadeIn 0.2s ease-out; }
@@ -199,12 +199,12 @@ const FriendlyLinks = {
             .gm-fl-desc { font-size: 12px; color: #909399; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         `;
         document.head.appendChild(style);
-
+    
         const overlay = document.createElement('div');
         overlay.id = 'gm-friendly-links-modal';
         overlay.className = 'gm-fl-modal-overlay';
         overlay.style.display = 'none';
-
+    
         let contentHtml = this.categories.map(cat => `
             <div class="gm-fl-category">
                 <div class="gm-fl-cat-title">${cat.titleIcon} ${cat.title}</div>
@@ -221,7 +221,7 @@ const FriendlyLinks = {
                 </div>
             </div>
         `).join('');
-
+    
         overlay.innerHTML = `
             <div class="gm-fl-modal" onclick="event.stopPropagation()">
                 <div class="gm-fl-header">
@@ -239,20 +239,20 @@ const FriendlyLinks = {
     },
     show: function() { this.initModal(); document.getElementById('gm-friendly-links-modal').style.display = 'flex'; }
 };
-
+    
 // --- 版本检查器 ---
 const UpdateChecker = {
     check: function(auto = false) {
         const btnText = document.getElementById('gm-update-text');
         if (!auto && btnText) btnText.innerHTML = "正在检查更新...";
-
+    
         const metaUrl = 'https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.meta.js?t=' + Date.now();
         const urlsToTry = [
             metaUrl,
             `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(metaUrl)}`,
             `https://api.allorigins.win/raw?url=${encodeURIComponent(metaUrl)}`
         ];
-
+    
         let currentTry = 0;
         const requestNext = () => {
             if (currentTry >= urlsToTry.length) {
@@ -270,7 +270,7 @@ const UpdateChecker = {
                             if (match && match[1]) {
                                 const latestVersion = match[1];
                                 const currentVersion = typeof GM_info !== 'undefined' ? GM_info.script.version : '1.0.0';
-
+    
                                 if (UpdateChecker.compareVersion(latestVersion, currentVersion) > 0) {
                                     if (btnText) btnText.innerHTML = `<span style="color:#F56C6C;font-weight:bold;display:flex;align-items:center;"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:4px;"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>发现新版本 v${latestVersion}</span>`;
                                     const badge = document.querySelector('.gm-float-ball .gm-badge');
@@ -301,14 +301,14 @@ const UpdateChecker = {
     },
     openUpdatePage: function() {
         if (document.getElementById('gm-update-modal-overlay')) return;
-
+    
         const overlay = document.createElement('div');
         overlay.id = 'gm-update-modal-overlay';
         overlay.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:999999; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(3px); animation: gmFadeIn 0.2s;';
-
+    
         const modal = document.createElement('div');
         modal.style.cssText = 'background:#fff; width:440px; padding:24px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,0.2); font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; text-align:center; position:relative;';
-
+    
         modal.innerHTML = `
             <h3 style="margin:0 0 15px 0; color:#303133; font-size:18px; display:flex; align-items:center; justify-content:center; gap:8px;">
                 <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
@@ -328,7 +328,7 @@ const UpdateChecker = {
                     </div>
                     请在浏览器的下载列表中找到刚刚下载的<b>“翱翔教务功能加强.user.js”</b>，将其<b>直接拖拽到当前浏览器网页中</b>释放鼠标，即可弹出更新界面！
                 </div>
-
+    
                 <div style="display:flex; gap:10px; margin-top:5px;">
                     <button id="gm-update-btn-direct" style="flex:1; background:#f4f4f5; color:#606266; border:1px solid #dcdfe6; padding:10px; border-radius:6px; font-size:13px; cursor:pointer; transition:all 0.2s; display:flex; align-items:center; justify-content:center; gap:6px;">
                         <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
@@ -340,22 +340,22 @@ const UpdateChecker = {
                 </div>
             </div>
         `;
-
+    
         overlay.appendChild(modal);
         document.body.appendChild(overlay);
-
+    
         document.getElementById('gm-update-btn-close').onclick = () => overlay.remove();
         document.getElementById('gm-update-btn-direct').onclick = () => {
             window.open('https://greasyfork.org/zh-CN/scripts/524099', '_blank');
             overlay.remove();
         };
-
+    
         const proxyBtn = document.getElementById('gm-update-btn-proxy');
         const tipBox = document.getElementById('gm-update-tip');
-
+    
         proxyBtn.onclick = () => {
             proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" class="gm-spin" style="margin-right:6px;"><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line></svg>正在拉取代码，请稍候...';
-
+    
             // 补充一个简单的动画让等待按钮转起来
             if(!document.getElementById('gm-spin-style')){
                 const style = document.createElement('style');
@@ -363,13 +363,13 @@ const UpdateChecker = {
                 style.textContent = '@keyframes gmSpin { 100% { transform: rotate(360deg); } } .gm-spin { animation: gmSpin 1s linear infinite; }';
                 document.head.appendChild(style);
             }
-
+    
             proxyBtn.disabled = true;
             proxyBtn.style.opacity = '0.7';
-
+    
             const scriptUrl = 'https://update.greasyfork.org/scripts/524099/%E7%BF%B1%E7%BF%94%E6%95%99%E5%8A%A1%E5%8A%9F%E8%83%BD%E5%8A%A0%E5%BC%BA.user.js';
             const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(scriptUrl)}`;
-
+    
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: proxyUrl,
@@ -384,7 +384,7 @@ const UpdateChecker = {
                         a.click();
                         document.body.removeChild(a);
                         URL.revokeObjectURL(url);
-
+    
                         proxyBtn.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>下载完成！请按下方提示操作';
                         proxyBtn.style.background = "#67C23A";
                         tipBox.style.display = "block";
@@ -405,7 +405,7 @@ const UpdateChecker = {
         };
     }
 };
-
+    
 // --- 关注课程数据管理 ---
 const FollowManager = {
     getList() {
@@ -430,9 +430,9 @@ const FollowManager = {
     },
     has(courseId) { return !!this.getList()[courseId]; }
 };
-
+    
 // --- 基础数据获取与缓存 ---
-
+    
 /**
  * 获取SessionStorage缓存的数据
  */
@@ -444,7 +444,7 @@ function getCachedData() {
     }
     return null;
 }
-
+    
 /**
  * 写入数据到SessionStorage
  */
@@ -452,23 +452,23 @@ function setCachedData(data) {
     try { sessionStorage.setItem(CONSTANTS.CACHE_KEY, JSON.stringify(data)); }
     catch (error) { Logger.error('Core', "缓存写入失败", error); }
 }
-
+    
 /**
  * 获取学号
  */
 async function getStudentId() {
     Logger.log('Core', "正在通过 API 获取 StudentID...");
-
+    
     // 优先尝试读取本地缓存
     const localId = localStorage.getItem('cs-course-select-student-id');
     if (localId) {
         // Logger.log('Core', "发现本地缓存 ID:", localId);
         // return localId;
     }
-
+    
     return new Promise((resolve) => {
         const infoUrl = "https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getStdInfo?bizTypeAssoc=2&cultivateTypeAssoc=1";
-
+    
         GM_xmlhttpRequest({
             method: "GET",
             url: infoUrl,
@@ -487,8 +487,8 @@ async function getStudentId() {
                             resolve(null);
                         }
                     } catch (e) {
-                         Logger.error('Core', "API JSON 解析失败", e);
-                         resolve(null);
+                            Logger.error('Core', "API JSON 解析失败", e);
+                            resolve(null);
                     }
                 } else {
                     Logger.error('Core', `API 请求失败，HTTP状态码: ${response.status}`);
@@ -502,7 +502,7 @@ async function getStudentId() {
         });
     });
 }
-
+    
 /**
  * 从后端抓取所有成绩数据并缓存
  */
@@ -515,15 +515,15 @@ async function fetchAllDataAndCache(retryCount = 0) {
             new Promise(r => GM_xmlhttpRequest({ method: "GET", url: `https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getMyGrades?studentAssoc=${studentId}&semesterAssoc=`, onload: r, onerror: () => r({status:500}) })),
             new Promise(r => GM_xmlhttpRequest({ method: "GET", url: `https://jwxt.nwpu.edu.cn/student/for-std/student-portrait/getMyGradesByProgram?studentAssoc=${studentId}`, onload: r, onerror: () => r({status:500}) }))
         ]);
-
-         // --- 判断 ID 是否失效 ---
+    
+            // --- 判断 ID 是否失效 ---
         // 1. 检查 HTTP 状态码是否异常（通常 401, 403, 500 代表 ID 不匹配或过期）
         // 2. 检查返回内容是否包含登录 HTML（说明 Session 失效重定向了）
         const isInvalid = (res) => {
             return res.status !== 200 ||
-                   (typeof res.responseText === 'string' && res.responseText.includes('<!DOCTYPE html>'));
+                    (typeof res.responseText === 'string' && res.responseText.includes('<!DOCTYPE html>'));
         };
-
+    
         if (isInvalid(gpaRes) || isInvalid(semRes)) {
             if (retryCount < 1) { // 仅允许重试一次，防止死循环
                 Logger.warn("Core", "检测到请求无效，准备重试...");
@@ -533,17 +533,17 @@ async function fetchAllDataAndCache(retryCount = 0) {
                 throw new Error("多次请求均无效，请检查登录状态。");
             }
         }
-
+    
         const gpaData = JSON.parse(gpaRes.responseText);
         const gpaRankData = gpaData.stdGpaRankDto || { rank: null, gpa: null };
-
+    
         const semesterData = JSON.parse(semRes.responseText);
         const semesters = Array.isArray(semesterData.semesters) ? semesterData.semesters.sort((a, b) => b.id - a.id) : [];
         const semesterIds = semesters.map(s => s.id);
         const semesterNames = semesters.map(s => s.nameZh);
-
+    
         const classRankData = {};
-
+    
         if (rankRes.status === 200) {
             try {
                 const data = JSON.parse(rankRes.responseText);
@@ -563,7 +563,7 @@ async function fetchAllDataAndCache(retryCount = 0) {
                 console.error("[NWPU-Enhanced] 解析排名数据失败", e);
             }
         }
-
+    
         let allGrades = [];
         if (semesterIds.length > 0) {
             const gradePromises = semesterIds.map(semesterId =>
@@ -576,7 +576,7 @@ async function fetchAllDataAndCache(retryCount = 0) {
                     });
                 })
             );
-
+    
             const allGradesArrays = await Promise.all(gradePromises);
             allGradesArrays.forEach((grades, index) => {
                 const semesterName = semesterNames[index];
@@ -595,9 +595,9 @@ async function fetchAllDataAndCache(retryCount = 0) {
                 });
             });
         }
-
+    
         checkForNewGrades(allGrades);
-
+    
         const finalData = { gpaRankData, allGrades, semesterNames };
         setCachedData(finalData);
         Logger.log('Initial', "数据获取完成，已写入缓存");
@@ -607,24 +607,24 @@ async function fetchAllDataAndCache(retryCount = 0) {
         throw error;
     }
 }
-
+    
 /**
  * 检查是否有新成绩发布
  * @param {Array} newGrades 本次抓取到的所有成绩数组
  */
 function checkForNewGrades(newGrades) {
     if (!newGrades || newGrades.length === 0) return;
-
+    
     // 1. 获取上次存储的成绩快照
     const oldGradesRaw = GM_getValue(CONSTANTS.GRADES_SNAPSHOT_KEY, null);
-
+    
     // 2. 如果是第一次运行，直接保存当前数据，不弹窗（避免首次安装就弹窗）
     if (!oldGradesRaw) {
         GM_setValue(CONSTANTS.GRADES_SNAPSHOT_KEY, JSON.stringify(newGrades));
         Logger.log('GradeCheck', '首次运行，建立成绩快照');
         return;
     }
-
+    
     let oldGrades = [];
     try {
         oldGrades = JSON.parse(oldGradesRaw);
@@ -632,30 +632,30 @@ function checkForNewGrades(newGrades) {
         GM_setValue(CONSTANTS.GRADES_SNAPSHOT_KEY, JSON.stringify(newGrades));
         return;
     }
-
+    
     // 3. 构建旧数据的映射表 (Key: 课程代码, Value: 成绩/绩点组合字符串)
     // 使用组合字符串是为了检测成绩数值的变化
     const oldMap = new Map();
     oldGrades.forEach(g => {
         oldMap.set(g['课程代码'], `${g['成绩']}-${g['绩点']}`);
     });
-
+    
     // 4. 对比找出新成绩
     const newUpdates = [];
     newGrades.forEach(g => {
         const code = g['课程代码'];
         const currentSig = `${g['成绩']}-${g['绩点']}`;
-
+    
         // 情况A: 旧数据里没有这门课 (新出的课)
         // 情况B: 旧数据里有这门课，但是成绩/绩点变了 (更新了成绩)
         if (!oldMap.has(code) || oldMap.get(code) !== currentSig) {
             // 排除掉可能是还没出成绩的数据
             if (g['成绩'] && g['成绩'] !== '-') {
-                 newUpdates.push(g);
+                    newUpdates.push(g);
             }
         }
     });
-
+    
     // 5. 如果有更新
     if (newUpdates.length > 0) {
         Logger.log('GradeCheck', `发现 ${newUpdates.length} 门新成绩`);
@@ -667,14 +667,14 @@ function checkForNewGrades(newGrades) {
         Logger.log('GradeCheck', '未检测到成绩变化');
     }
 }
-
+    
 /**
  * 在页面顶部指定位置悬浮显示新成绩通知
  */
 function showGradeNotification(courses) {
     // 防止重复插入
     if (document.getElementById('gm-new-grade-banner')) return;
-
+    
     const style = document.createElement('style');
     style.innerHTML = `
         .gm-new-grade-banner {
@@ -683,36 +683,36 @@ function showGradeNotification(courses) {
             left: 50%;
             transform: translateX(-50%);
             z-index: 999999;
-
+    
             background: linear-gradient(135deg, #e6f7ff 0%, #d1edff 100%); /* 浅蓝渐变背景 */
             border: 1px solid #a6d4fa; /* 浅蓝边框 */
             color: #004085; /* 深蓝色文字，对比度更高更清晰 */
             box-shadow: 0 8px 20px rgba(0, 123, 255, 0.15); /* 蓝色的淡淡投影 */
-
+    
             padding: 15px 30px;
             border-radius: 50px;
-
+    
             display: flex;
             align-items: center;
             gap: 15px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             min-width: 400px;
             max-width: 80%;
-
+    
             animation: gmSlideIn 0.6s cubic-bezier(0.22, 1, 0.36, 1);
         }
-
+    
         @keyframes gmSlideIn {
             from { opacity: 0; transform: translate(-50%, -20px); }
             to { opacity: 1; transform: translate(-50%, 0); }
         }
-
+    
         .gm-ng-content { display: flex; align-items: center; flex: 1; }
         .gm-ng-emoji { font-size: 24px; margin-right: 10px; }
         .gm-ng-title { font-weight: bold; font-size: 16px; margin-right: 10px; color: #0056b3; /* 标题用亮一点的蓝 */ }
         .gm-ng-list { font-size: 14px; color: #333; font-weight: 500; }
         .gm-ng-tip { font-size: 12px; color: #6699cc; margin-left: 10px; /* 提示语用灰蓝色 */ }
-
+    
         .gm-ng-btn {
             background: #fff;
             border: 1px solid #a6d4fa;
@@ -733,14 +733,14 @@ function showGradeNotification(courses) {
         }
     `;
     document.head.appendChild(style);
-
+    
     const banner = document.createElement('div');
     banner.id = 'gm-new-grade-banner';
     banner.className = 'gm-new-grade-banner';
-
+    
     // 构建课程列表字符串
     const courseText = courses.map(c => `[${c['课程代码']}] ${c['课程名称']}`).join('、');
-
+    
     banner.innerHTML = `
         <div class="gm-ng-content">
             <div>
@@ -750,7 +750,7 @@ function showGradeNotification(courses) {
         </div>
         <button class="gm-ng-btn" onclick="this.parentElement.remove()">知道了</button>
     `;
-
+    
     document.body.appendChild(banner);
 }
 // =-=-=-=-=-=-=-=-=-=-=-=-= 1. 主页初始化与诊断 =-=-=-=-=-=-=-=-=-=-=-=-=
@@ -765,10 +765,10 @@ function printStorageDiagnosis() {
         const raw = isSession ? sessionStorage.getItem(key) : GM_getValue(key);
         try { return raw ? JSON.parse(raw) : null; } catch(e) { return null; }
     };
-
+    
     try {
         console.groupCollapsed('%c[NWPU-Enhanced]脚本环境诊断报告 (点击展开)', 'background:#007bff; color:#fff; padding:4px 8px; border-radius:4px;');
-
+    
         // --- 1. 基础环境与配置 ---
         const studentId = localStorage.getItem('cs-course-select-student-id');
         const configData = {
@@ -780,7 +780,7 @@ function printStorageDiagnosis() {
         };
         console.log('%c 1. 环境与配置', 'color: #007bff; font-weight: bold;');
         console.table(configData);
-
+    
         // --- 2. 成绩缓存数据 (SessionStorage) ---
         const cachedData = safeParse(CONSTANTS.CACHE_KEY, true);
         const cacheRawSize = sessionStorage.getItem(CONSTANTS.CACHE_KEY);
@@ -806,7 +806,7 @@ function printStorageDiagnosis() {
         } else {
             console.log('%c ⚠️ 未检测到成绩缓存 (正常现象，稍后会自动抓取)', 'color: orange');
         }
-
+    
         // --- 3. 关注课程数据 (LocalStorage) ---
         const followed = FollowManager.getList();
         const followedRaw = GM_getValue(CONSTANTS.FOLLOWED_COURSES_KEY);
@@ -821,14 +821,14 @@ function printStorageDiagnosis() {
         } else {
             console.log('⚪ 关注列表为空');
         }
-
+    
         // --- 4. 选课助手/后台同步数据 ---
         const bgData = safeParse(CONSTANTS.BACKGROUND_SYNC_KEY);
         const bgRaw = GM_getValue(CONSTANTS.BACKGROUND_SYNC_KEY);
         const lastSyncTime = GM_getValue(CONSTANTS.LAST_SYNC_TIME_KEY, 0);
         const historyData = safeParse(CONSTANTS.HISTORY_STORAGE_KEY);
         const historyRaw = GM_getValue(CONSTANTS.HISTORY_STORAGE_KEY);
-
+    
         console.log('%c 4. 选课助手数据', 'color: #007bff; font-weight: bold;');
         console.table({
             '全校课表缓存 (条数)': bgData ? bgData.length : 0,
@@ -842,29 +842,29 @@ function printStorageDiagnosis() {
         console.error('[NWPU-Enhanced] 诊断报告生成失败', e);
     }
 }
-
+    
 async function initializeHomePageFeatures() {
     const isEcampus = location.host === 'ecampus.nwpu.edu.cn';
-
+    
     // 1. UI 初始化
     if (!isEcampus) printStorageDiagnosis();
     createFloatingMenu(isEcampus); // 传入当前环境标志
-
+    
     if (isEcampus) return;
-
+    
     initExportUI();
     initScheduleWidget();
-
+    
     // 首次运行检测
     const FIRST_RUN_KEY = 'jwxt_enhanced_v162_intro_shown';
     if (!GM_getValue(FIRST_RUN_KEY, false)) {
         setTimeout(() => handleHelpClick(), 1500);
         GM_setValue(FIRST_RUN_KEY, true);
     }
-
+    
     // 2. 设置按钮状态为“加载中”
     updateMenuButtonsState(false);
-
+    
     // 3. 【延迟执行】定义繁重的数据加载任务
     const runHeavyDataFetch = async () => {
         let cachedData = getCachedData();
@@ -881,7 +881,7 @@ async function initializeHomePageFeatures() {
             }
         }
     };
-
+    
     // 4. 使用 requestIdleCallback 在浏览器空闲时执行
     if ('requestIdleCallback' in window) {
         window.requestIdleCallback(() => {
@@ -890,7 +890,7 @@ async function initializeHomePageFeatures() {
     } else {
         setTimeout(runHeavyDataFetch, 1000);
     }
-
+    
     // 注册控制台调试命令
     if (typeof unsafeWindow !== 'undefined') {
         unsafeWindow.nwpuDiag = function() { printStorageDiagnosis(); return "✅ 诊断报告已生成"; };
@@ -901,7 +901,7 @@ async function initializeHomePageFeatures() {
         console.log("%c[NWPU-Enhanced]调试提示：在控制台输入 'axjw_test' 并按Enter键，可重新显示诊断报告。", "color: gray; font-style: italic;");
     }
 }
-
+    
 function createFloatingMenu(isEcampus = false) {
     if (!document.getElementById('gm-float-menu-style')) {
         const style = document.createElement('style');
@@ -916,7 +916,7 @@ function createFloatingMenu(isEcampus = false) {
                 user-select: none; transition: all 0.2s; touch-action: none;
             }
             .gm-float-ball:hover { transform: scale(1.08); background-color: #66b1ff; }
-
+    
             /* 菜单容器 */
             .gm-float-menu {
                 position: fixed; width: 230px !important; background-color: #fff; border-radius: 8px;
@@ -927,12 +927,12 @@ function createFloatingMenu(isEcampus = false) {
                 max-height: 85vh; overflow-y: auto; /* 防止屏幕太小显示不全 */
             }
             .gm-float-menu.show { display: flex; opacity: 1; transform: translateY(0); }
-
+    
             /* 滚动条美化 */
             .gm-float-menu::-webkit-scrollbar { width: 5px; }
             .gm-float-menu::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 3px; }
-
-           /* 分组标题 */
+    
+            /* 分组标题 */
             .gm-menu-group-title {
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
                 font-size: 12px !important; color: #909399 !important; padding: 10px 18px 4px !important;
@@ -940,7 +940,7 @@ function createFloatingMenu(isEcampus = false) {
                 font-weight: bold !important; pointer-events: none !important; letter-spacing: 1px !important;
             }
             .gm-menu-group-title:first-child { margin-top: 0 !important; border-top: none !important; padding-top: 6px !important; }
-
+    
             /* 菜单项 */
             .gm-menu-item {
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
@@ -954,38 +954,38 @@ function createFloatingMenu(isEcampus = false) {
             }
             .gm-menu-item:hover:not(:disabled) { background-color: #f0f7ff !important; color: #007bff !important; }
             .gm-menu-item:disabled { cursor: not-allowed; color: #c0c4cc !important; }
-
+    
             .gm-view-main { display: flex; flex-direction: column; width: 100%; }
             .gm-badge { position: absolute; top: -2px; right: -2px; width: 10px; height: 10px; background: #ff4d4f; border-radius: 50%; display: none; border: 2px solid #fff;}
             .gm-icon { width: 18px; text-align: center; display: inline-block; font-weight: bold; flex-shrink: 0; font-size: 15px; }
         `;
         document.head.appendChild(style);
     }
-
+    
     floatBall = document.createElement('div');
     floatBall.className = 'gm-float-ball';
     floatBall.innerHTML = '⚙<div class="gm-badge"></div>';
     floatBall.title = "翱翔教务功能增强设置";
     document.body.appendChild(floatBall);
-
+    
     floatMenu = document.createElement('div');
     floatMenu.className = 'gm-float-menu';
-
+    
     const mainView = document.createElement('div');
     mainView.className = 'gm-view-main';
-
+    
     const updateBtnHtml = `
         <div class="gm-menu-group-title">关于与更新</div>
         <button class="gm-menu-item" id="gm-btn-update"><span class="gm-icon">🔄</span> <span id="gm-update-text">检查版本更新</span></button>
     `;
-
+    
     // 根据环境注入不同的 DOM
     if (isEcampus) {
         mainView.innerHTML = `
             <div class="gm-menu-group-title">快捷工具</div>
             <button class="gm-menu-item" id="gm-btn-person-search"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span> 人员信息检索</button>
             <button class="gm-menu-item" id="gm-btn-links"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> 常用链接访问</button>
-
+    
             <div class="gm-menu-group-title">系统设置</div>
             <button class="gm-menu-item" id="gm-btn-update"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><polyline points="23 20 23 14 17 14"></polyline><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path></svg></span> <span id="gm-update-text">检查版本更新</span></button>
         `;
@@ -994,16 +994,16 @@ function createFloatingMenu(isEcampus = false) {
             <div class="gm-menu-group-title">成绩与学业分析</div>
             <button class="gm-menu-item" id="gm-btn-gpa" disabled><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg></span> GPA综合分析</button>
             <button class="gm-menu-item" id="gm-btn-export" disabled><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg></span> 导出成绩与排名</button>
-
+    
             <div class="gm-menu-group-title">选课助手</div>
             <button class="gm-menu-item" id="gm-btn-follow"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg></span> 课程关注列表</button>
             <button class="gm-menu-item" id="gm-btn-sync-course"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l2-2 4 4 2-2h4"></path></svg></span> 同步最新选课数据</button>
-
+    
             <div class="gm-menu-group-title">快捷工具</div>
             <button class="gm-menu-item" id="gm-btn-eval-jump"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polygon points="14 2 18 6 7 17 3 17 3 13 14 2"></polygon><line x1="3" y1="22" x2="21" y2="22"></line></svg></span> 一键自动评教</button>
             <button class="gm-menu-item" id="gm-btn-person-search"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg></span> 人员信息检索</button>
             <button class="gm-menu-item" id="gm-btn-links"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></span> 常用链接访问</button>
-
+    
             <div class="gm-menu-group-title">偏好与系统设置</div>
             <button class="gm-menu-item" id="gm-chk-portrait-btn"><span class="gm-icon" id="icon-portrait"></span> 启用学生画像增强</button>
             <button class="gm-menu-item" id="gm-chk-watch-btn"><span class="gm-icon" id="icon-watch"></span> 启用选课辅助功能</button>
@@ -1011,10 +1011,10 @@ function createFloatingMenu(isEcampus = false) {
             <button class="gm-menu-item" id="gm-btn-update"><span class="gm-icon"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><polyline points="23 20 23 14 17 14"></polyline><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path></svg></span> <span id="gm-update-text">检查版本更新</span></button>
         `;
     }
-
+    
     floatMenu.appendChild(mainView);
     document.body.appendChild(floatMenu);
-
+    
     // 绑定共有事件
     menuHupanBtn = document.getElementById('gm-btn-hupan');
     // 绑定共有事件
@@ -1025,17 +1025,17 @@ function createFloatingMenu(isEcampus = false) {
             FriendlyLinks.show(); // 弹出友情链接弹窗
         };
     }
-
+    
     document.getElementById('gm-btn-person-search').onclick = () => {
-       hideMenu();
-       PersonnelSearch.openModal();
+        hideMenu();
+        PersonnelSearch.openModal();
     };
-
+    
     document.getElementById('gm-btn-person-search').onclick = () => {
-       hideMenu();
-       PersonnelSearch.openModal();
+        hideMenu();
+        PersonnelSearch.openModal();
     };
-
+    
     // 绑定教务系统专属事件
     if (!isEcampus) {
         menuExportBtn = document.getElementById('gm-btn-export');
@@ -1043,24 +1043,24 @@ function createFloatingMenu(isEcampus = false) {
         menuSyncBtn = document.getElementById('gm-btn-sync-course');
         menuFollowBtn = document.getElementById('gm-btn-follow');
         const menuHelpBtn = document.getElementById('gm-btn-help');
-
+    
         menuExportBtn.onclick = handleExportClick;
         menuGpaBtn.onclick = handleGpaClick;
         menuSyncBtn.onclick = handleSyncCourseClick;
         menuFollowBtn.onclick = handleShowFollowedClick;
         menuHelpBtn.onclick = () => handleHelpClick();
         document.getElementById('gm-btn-eval-jump').onclick = handleJumpToEvaluation;
-
+    
         const updateToggleUI = () => {
             const isPortrait = ConfigManager.enablePortraitEnhancement;
             const isWatch = ConfigManager.enableCourseWatch;
             document.getElementById('icon-portrait').textContent = isPortrait ? '☑' : '☐';
             document.getElementById('icon-watch').textContent = isWatch ? '☑' : '☐';
-
+    
             document.getElementById('gm-chk-portrait-btn').style.color = isPortrait ? '#333' : '#999';
             document.getElementById('gm-chk-watch-btn').style.color = isWatch ? '#333' : '#999';
         };
-
+    
         document.getElementById('gm-chk-portrait-btn').onclick = () => {
             ConfigManager.enablePortraitEnhancement = !ConfigManager.enablePortraitEnhancement;
             updateToggleUI();
@@ -1068,7 +1068,7 @@ function createFloatingMenu(isEcampus = false) {
                 if(confirm("修改画像增强设置需要刷新页面生效，是否刷新？")) window.location.reload();
             }
         };
-
+    
         document.getElementById('gm-chk-watch-btn').onclick = () => {
             ConfigManager.enableCourseWatch = !ConfigManager.enableCourseWatch;
             updateToggleUI();
@@ -1078,10 +1078,10 @@ function createFloatingMenu(isEcampus = false) {
         };
         updateToggleUI();
     }
-
+    
     // 处理悬浮球全局事件 (防点击空白处、拖拽等)
     document.addEventListener('click', (e) => { if (!floatMenu.contains(e.target) && !floatBall.contains(e.target)) hideMenu(); });
-
+    
     let isDragging = false, hasMoved = false, startX, startY, initialLeft, initialTop;
     floatBall.addEventListener('mousedown', (e) => {
         isDragging = true; hasMoved = false; startX = e.clientX; startY = e.clientY;
@@ -1097,7 +1097,7 @@ function createFloatingMenu(isEcampus = false) {
         floatBall.style.bottom = 'auto'; floatBall.style.right = 'auto';
     });
     document.addEventListener('mouseup', () => { if (isDragging) { isDragging = false; floatBall.style.transition = 'all 0.2s'; } });
-
+    
     floatBall.addEventListener('click', (e) => {
         e.stopPropagation(); if (hasMoved) return;
         if (floatMenu.classList.contains('show')) hideMenu();
@@ -1105,13 +1105,13 @@ function createFloatingMenu(isEcampus = false) {
             const rect = floatBall.getBoundingClientRect();
             let left = rect.left - 230;
             if(left < 10) left = rect.right + 10;
-
+    
             floatMenu.style.left = left + 'px';
             floatMenu.style.top = rect.top + 'px';
             showMenu();
         }
     });
-
+    
     // 绑定更新按钮点击事件
     document.getElementById('gm-btn-update').onclick = () => {
         const btnText = document.getElementById('gm-update-text').innerText;
@@ -1124,32 +1124,32 @@ function createFloatingMenu(isEcampus = false) {
     // 首次加载自动静默检查更新
     UpdateChecker.check(true);
 }
-
+    
 function showMenu() { floatMenu.style.display = 'flex'; floatMenu.offsetHeight; floatMenu.classList.add('show'); }
-
+    
 function hideMenu() { floatMenu.classList.remove('show'); setTimeout(() => { if(!floatMenu.classList.contains('show')) floatMenu.style.display = 'none'; }, 200); }
-
+    
 function updateMenuButtonsState(isReady) {
     if (!menuExportBtn || !menuGpaBtn) return;
     menuExportBtn.disabled = !isReady;
     menuGpaBtn.disabled = !isReady;
-
+    
     const badge = floatBall.querySelector('.gm-badge');
     if (badge) {
         badge.style.display = (!isReady || isBackgroundSyncing) ? 'block' : 'none';
 }
 }
-
+    
 // ----------------- 功能处理函数 -----------------
-
+    
 /**
  * 处理点击导出按钮`
  */
 function handleExportClick() {
     hideMenu();
     if (semesterCheckboxContainer && semesterCheckboxContainer.style.display === "block") {
-         semesterCheckboxContainer.style.display = "none";
-         return;
+            semesterCheckboxContainer.style.display = "none";
+            return;
     }
     const cachedData = getCachedData();
     if (isDataReady && cachedData) {
@@ -1158,7 +1158,7 @@ function handleExportClick() {
         alert("成绩数据仍在后台加载中，请稍候...");
     }
 }
-
+    
 /**
  * 处理点击GPA分析按钮
  */
@@ -1171,7 +1171,7 @@ function handleGpaClick() {
         alert("成绩数据仍在后台加载中，请稍候...");
     }
 }
-
+    
 /**
  * 处理点击同步数据按钮
  */
@@ -1179,28 +1179,28 @@ function handleSyncCourseClick() {
     hideMenu();
     // 提示文案明确界定功能范围
     const confirmMsg = '【更新选课助手数据】\n\n' +
-                       '此操作将跳转至“全校开课查询”页面，并自动执行数据更新。\n' +
-                       '数据将用于选课页面的“历史余量”参考。\n' +
-                       '建议每轮选课开始前执行一次。\n\n' +
-                       '同步将花费几十秒，是否跳转并开始同步？';
-
+                        '此操作将跳转至“全校开课查询”页面，并自动执行数据更新。\n' +
+                        '数据将用于选课页面的“历史余量”参考。\n' +
+                        '建议每轮选课开始前执行一次。\n\n' +
+                        '同步将花费几十秒，是否跳转并开始同步？';
+    
     if (confirm(confirmMsg)) {
         sessionStorage.setItem('nwpu_course_sync_trigger', 'true');
-
+    
         // 尝试查找链接跳转
         let courseLink = document.querySelector('a[onclick*="lesson-search"]') ||
-                         document.querySelector('a[href*="/student/for-std/lesson-search"]') ||
-                         document.querySelector('a[data-text="全校开课查询"]'); // 增加data-text匹配
-
+                            document.querySelector('a[href*="/student/for-std/lesson-search"]') ||
+                            document.querySelector('a[data-text="全校开课查询"]'); // 增加data-text匹配
+    
         // 尝试在顶层窗口查找
         if (!courseLink && window.top !== window.self) {
             try {
                 courseLink = window.top.document.querySelector('a[onclick*="lesson-search"]') ||
-                             window.top.document.querySelector('a[href*="/student/for-std/lesson-search"]') ||
-                             window.top.document.querySelector('a[data-text="全校开课查询"]');
+                                window.top.document.querySelector('a[href*="/student/for-std/lesson-search"]') ||
+                                window.top.document.querySelector('a[data-text="全校开课查询"]');
             } catch (e) { /* 忽略跨域错误 */ }
         }
-
+    
         if (courseLink) {
             courseLink.click();
         } else {
@@ -1209,13 +1209,13 @@ function handleSyncCourseClick() {
         }
     }
 }
-
+    
 /**
  * 处理点击帮助按钮 - 弹窗版操作指南
  */
 function handleHelpClick() {
     hideMenu(); // 关闭悬浮菜单
-
+    
     // 1. 注入弹窗专用样式
     const styleId = 'gm-help-popup-style';
     if (!document.getElementById(styleId)) {
@@ -1254,7 +1254,7 @@ function handleHelpClick() {
             .gm-help-title { font-size: 18px; font-weight: bold; color: #333; display: flex; align-items: center; gap: 8px; }
             .gm-help-close { border: none; background: transparent; font-size: 24px; color: #999; cursor: pointer; transition: color 0.2s; }
             .gm-help-close:hover { color: #F56C6C; }
-
+    
             /* 内容区 */
             .gm-help-body { padding: 0; overflow-y: auto; background-color: #fcfcfc; }
             .gm-help-section {
@@ -1276,7 +1276,7 @@ function handleHelpClick() {
             .gm-help-step::before {
                 content: "•"; position: absolute; left: 0; color: #bbb;
             }
-
+    
             /* UI 标签模拟 */
             .gm-tag {
                 display: inline-block; padding: 0 6px; border-radius: 4px;
@@ -1285,20 +1285,20 @@ function handleHelpClick() {
             .gm-tag-blue { background: #ecf5ff; color: #409EFF; border: 1px solid #d9ecff; }
             .gm-tag-red  { background: #fef0f0; color: #F56C6C; border: 1px solid #fde2e2; }
             .gm-tag-gray { background: #f4f4f5; color: #909399; border: 1px solid #e9e9eb; }
-
+    
             /* 动画 */
             @keyframes gmFadeIn { from { opacity: 0; } to { opacity: 1; } }
         `;
         document.head.appendChild(style);
     }
-
+    
     // 2. 创建 DOM 结构
     const overlay = document.createElement('div');
     overlay.className = 'gm-help-overlay';
-
+    
     const modal = document.createElement('div');
     modal.className = 'gm-help-modal';
-
+    
     // 3. 构建 HTML 内容
     modal.innerHTML = `
         <div class="gm-help-header">
@@ -1306,7 +1306,7 @@ function handleHelpClick() {
             <button class="gm-help-close" title="关闭">×</button>
         </div>
         <div class="gm-help-body">
-
+    
             <!-- 模块：成绩与画像 -->
             <div class="gm-help-section">
                 <div class="gm-help-sec-title" style="border-color:#F56C6C;">
@@ -1319,7 +1319,7 @@ function handleHelpClick() {
                     点击悬浮球菜单 <span class="gm-tag gm-tag-gray">⇩ 导出成绩</span>：生成包含<b>教学班排名</b>的 Excel 成绩单。
                 </div>
             </div>
-
+    
             <!-- 模块：选课助手 -->
             <div class="gm-help-section">
                 <div class="gm-help-sec-title" style="border-color:#409EFF;">
@@ -1343,7 +1343,7 @@ function handleHelpClick() {
                     - <b>关注课程高亮：</b>已关注的课程背景会高亮显示，方便用户定位。<br>
                 </div>
             </div>
-
+    
             <!-- 模块：实用工具 -->
             <div class="gm-help-section">
                 <div class="gm-help-sec-title" style="border-color:#67C23A;">
@@ -1353,7 +1353,7 @@ function handleHelpClick() {
                     <b>一键自动评教：</b>进入评教页面，点击右上角的 <span class="gm-tag gm-tag-blue">打开自动评教</span> 按钮。
                     按照操作可以任意给分评教或指定给分。
                 </div>
-                 <div class="gm-help-step">
+                    <div class="gm-help-step">
                     <b>人员检索：</b>悬浮球菜单点击 <span class="gm-tag gm-tag-gray">人员信息检索</span>，输入姓名/学号/工号可查询具体信息。
                 </div>
                 <div class="gm-help-step">
@@ -1362,29 +1362,29 @@ function handleHelpClick() {
                     <b>学生画像增强：</b>进入“学生画像”页面，脚本会自动修正顶部卡片的平均分算法，并优化底部“计划外课程”的表格显示（增加教学班排名）。
                 </div>
             </div>
-
+    
             <div style="text-align:center; padding:15px; color:#c0c4cc; font-size:12px;">
                 当前版本: ${GM_info.script.version} &nbsp;|&nbsp; 祝您学业进步
             </div>
         </div>
     `;
-
+    
     // 4. 组装与事件绑定
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
-
+    
     // 关闭逻辑
     const closeFn = () => {
         overlay.style.opacity = '0';
         setTimeout(() => overlay.remove(), 200);
     };
-
+    
     modal.querySelector('.gm-help-close').onclick = closeFn;
     overlay.onclick = (e) => {
         if (e.target === overlay) closeFn();
     };
 }
-
+    
 /**
  * 处理跳转至评教界面
  */
@@ -1393,17 +1393,17 @@ function handleJumpToEvaluation() {
     if (confirm("即将跳转至“学生总结性评教”页面，是否继续？")) {
         // ... (跳转逻辑)
         let evalLink = document.querySelector('a[onclick*="evaluation-student"]') ||
-                       document.querySelector('a[href*="evaluation-student"]') ||
-                       document.querySelector('a[data-text="学生总结性评教"]');
-
+                        document.querySelector('a[href*="evaluation-student"]') ||
+                        document.querySelector('a[data-text="学生总结性评教"]');
+    
         // 尝试在顶层窗口查找（应对 iframe 情况）
         if (!evalLink && window.top !== window.self) {
             try {
                 evalLink = window.top.document.querySelector('a[onclick*="evaluation-student"]') ||
-                           window.top.document.querySelector('a[data-text="学生总结性评教"]');
+                            window.top.document.querySelector('a[data-text="学生总结性评教"]');
             } catch (e) {}
         }
-
+    
         if (evalLink) {
             evalLink.click();
         } else {
@@ -1412,8 +1412,8 @@ function handleJumpToEvaluation() {
         }
     }
 }
-
-
+    
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.1 课程关注列表 =-=-=-=-=-=-=-=-=-=-=-=-=
 /**
  * 展示已关注课程列表
@@ -1421,7 +1421,7 @@ function handleJumpToEvaluation() {
 function handleShowFollowedClick() {
     hideMenu();
     Logger.log("2.1", "正在初始化课程关注列表...");
-
+    
     // 模块 1: 课程数据解析工具 (CourseParser)
     const CourseParser = {
         cnToNumber(str) {
@@ -1494,7 +1494,7 @@ function handleShowFollowedClick() {
             return results;
         }
     };
-
+    
     // 模块 2: 视图渲染器 (CourseParser)
     const ViewRenderer = {
         getStyle(name) {
@@ -1514,7 +1514,7 @@ function handleShowFollowedClick() {
             for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
             return palettes[Math.abs(hash) % palettes.length];
         },
-
+    
         renderList(courses, container) {
             if (!courses.length) {
                 container.innerHTML = `<div class="gm-empty-state"><p>暂无相关课程</p></div>`;
@@ -1541,18 +1541,18 @@ function handleShowFollowedClick() {
             html += `</tbody></table>`;
             container.innerHTML = html;
         },
-
+    
         renderTimetable(courses, container, targetWeek) {
             const timeSlots = [
                 { range: [1, 2] }, { range: [3, 4] }, { range: [5, 6] }, { range: [7, 8] }, { range: [9, 10] }, { range: [11, 12] }, { range: [13] }
             ];
-
+    
             let html = `<table class="gm-timetable"><thead><tr><th width="50" style="background:#f5f7fa;"></th><th width="13.5%">星期一</th><th width="13.5%">星期二</th><th width="13.5%">星期三</th><th width="13.5%">星期四</th><th width="13.5%">星期五</th><th width="13.5%">星期六</th><th width="13.5%">星期日</th></tr></thead><tbody>`;
-
+    
             timeSlots.forEach((slot, index) => {
                 const startNode = slot.range[0];
                 let slotBg = '#f9fafc'; // 默认颜色
-
+    
                 if (startNode <= 4) {
                     slotBg = '#e6f7ff'; // 1-4节 (上午): 浅蓝
                 } else if (startNode <= 6) {
@@ -1562,19 +1562,19 @@ function handleShowFollowedClick() {
                 } else {
                     slotBg = '#f4f4f5'; // 11-13节 (晚2): 浅灰
                 }
-
+    
                 let periodHtml = `<div class="gm-period-wrapper">`;
                 slot.range.forEach((num, idx) => {
                     const borderStyle = (idx < slot.range.length - 1) ? 'border-bottom: 1px solid rgba(0,0,0,0.06);' : '';
                     periodHtml += `<div class="gm-period-num" style="${borderStyle}">${num}</div>`;
                 });
                 periodHtml += `</div>`;
-
+    
                 html += `<tr><td class="gm-tt-period" style="background:${slotBg}">${periodHtml}</td>`;
-
+    
                 for (let day = 1; day <= 7; day++) {
                     const coursesInSlotMap = new Map();
-
+    
                     courses.forEach(course => {
                         const segments = CourseParser.parseTimeAndPlace(course.timeAndPlace);
                         segments.forEach(seg => {
@@ -1583,7 +1583,7 @@ function handleShowFollowedClick() {
                                 const weekNum = parseInt(targetWeek);
                                 if (seg.activeWeeks && seg.activeWeeks.size > 0 && !seg.activeWeeks.has(weekNum)) return;
                             }
-
+    
                             if (seg.startNode <= slot.range[slot.range.length-1] && seg.endNode >= slot.range[0]) {
                                 const key = course.id;
                                 if (!coursesInSlotMap.has(key)) {
@@ -1600,10 +1600,10 @@ function handleShowFollowedClick() {
                             }
                         });
                     });
-
+    
                     html += `<td style="vertical-align: top; padding: 2px;">`;
                     html += `<div class="gm-tt-cell-wrapper">`;
-
+    
                     if (coursesInSlotMap.size > 0) {
                         coursesInSlotMap.forEach(item => {
                             const style = this.getStyle(item.name);
@@ -1611,11 +1611,11 @@ function handleShowFollowedClick() {
                             if (weekInfoStr === "") weekInfoStr = "未知周次";
                             const uniqueDetails = [...new Set(item.detailSegments)];
                             const tooltip = `${item.name}\n${item.teachers}\n----------------\n${uniqueDetails.join('\n')}`;
-
+    
                             html += `
                                 <div class="gm-tt-course-block"
-                                     style="background: ${style.bg}; border-left: 3px solid ${style.border};"
-                                     title="${tooltip}">
+                                        style="background: ${style.bg}; border-left: 3px solid ${style.border};"
+                                        title="${tooltip}">
                                     <div class="gm-tt-name">${item.name}</div>
                                     <div class="gm-tt-info">@${item.segLocation}</div>
                                     <div class="gm-tt-info" style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
@@ -1630,18 +1630,18 @@ function handleShowFollowedClick() {
                 }
                 html += `</tr>`;
             });
-
+    
             html += `</tbody></table>`;
             const weekText = targetWeek === 'all' ? '全部周次' : `第 ${targetWeek} 周`;
             if(courses.length > 0) {
-                 html += `<div class="gm-tt-footer">当前展示：${weekText}</div>`;
+                    html += `<div class="gm-tt-footer">当前展示：${weekText}</div>`;
             } else {
-                 html = `<div class="gm-empty-state"><p>${weekText} 暂无课程</p></div>`;
+                    html = `<div class="gm-empty-state"><p>${weekText} 暂无课程</p></div>`;
             }
             container.innerHTML = html;
         }
     };
-
+    
     // 模块 3: CSS 样式注入
     const styleId = 'gm-followed-modal-style';
     if (!document.getElementById(styleId)) {
@@ -1688,18 +1688,18 @@ function handleShowFollowedClick() {
         `;
         document.head.appendChild(style);
     }
-
+    
     // 模块 4: 初始化
     const followedCourses = FollowManager.getList();
     let courseList = Object.values(followedCourses);
     const allSemesters = [...new Set(courseList.map(c => c.semester || '历史关注'))].sort().reverse();
-
+    
     let semesterOptions = `<option value="all">显示全部学期</option>`;
     allSemesters.forEach(sem => { semesterOptions += `<option value="${sem}">${sem}</option>`; });
-
+    
     let weekOptions = `<option value="all">显示全部周次</option>`;
     for(let i=1; i<=20; i++) weekOptions += `<option value="${i}">第 ${i} 周</option>`;
-
+    
     const modalHTML = `
         <div class="gm-modal-overlay" id="gm-modal-overlay">
             <div class="gm-modal-content">
@@ -1723,7 +1723,7 @@ function handleShowFollowedClick() {
                                 <select id="gm-week-select" class="gm-filter-select" style="min-width:100px; margin-left:5px;">${weekOptions}</select>
                             </div>
                         </div>
-
+    
                         <div class="gm-right-actions" style="display:flex; align-items:center; gap:15px;">
                             <span style="font-size:13px; color:#606266; font-weight:bold;">
                                 总学分: <span id="gm-total-credits" style="color:#409EFF">0</span>
@@ -1737,16 +1737,16 @@ function handleShowFollowedClick() {
             </div>
         </div>
     `;
-
+    
     const existingOverlay = document.getElementById('gm-modal-overlay');
     if (existingOverlay) existingOverlay.remove();
     const wrapper = document.createElement('div');
     wrapper.innerHTML = modalHTML;
     document.body.appendChild(wrapper.firstElementChild);
-
+    
     // 状态管理
     const state = { semester: 'all', week: 'all', currentTab: 'list' };
-
+    
     const refreshView = () => {
         const filtered = courseList.filter(c => state.semester === 'all' || (c.semester || '历史关注') === state.semester);
         filtered.sort((a, b) => {
@@ -1754,7 +1754,7 @@ function handleShowFollowedClick() {
             if (semA !== semB) return semB.localeCompare(semA);
             return a.code.localeCompare(b.code);
         });
-
+    
         // 【修改点】 计算并更新总学分
         let totalCredits = 0;
         filtered.forEach(c => {
@@ -1767,25 +1767,25 @@ function handleShowFollowedClick() {
         if (creditSpan) {
             creditSpan.innerText = totalCredits % 1 === 0 ? totalCredits : totalCredits.toFixed(1);
         }
-
+    
         if (state.currentTab === 'list') {
             ViewRenderer.renderList(filtered, document.getElementById('gm-table-wrapper'));
         } else {
             ViewRenderer.renderTimetable(filtered, document.getElementById('gm-timetable-wrapper'), state.week);
         }
-
+    
         const clearBtn = document.getElementById('gm-btn-clear-all');
         const btnText = state.semester === 'all' ? '清空全部' : '清空当前学期';
         clearBtn.innerHTML = `<span style="margin-left:4px">${btnText}</span>`;
         clearBtn.style.opacity = filtered.length === 0 ? '0.5' : '1';
         clearBtn.style.pointerEvents = filtered.length === 0 ? 'none' : 'auto';
     };
-
+    
     // 事件绑定
     const tabs = document.querySelectorAll('.gm-tab-item');
     const views = document.querySelectorAll('.gm-view-container');
     const weekFilterContainer = document.getElementById('gm-week-filter-container');
-
+    
     tabs.forEach(tab => {
         tab.onclick = () => {
             tabs.forEach(t => t.classList.remove('active'));
@@ -1797,13 +1797,13 @@ function handleShowFollowedClick() {
             refreshView();
         };
     });
-
+    
     document.getElementById('gm-semester-select').onchange = (e) => { state.semester = e.target.value; refreshView(); };
     document.getElementById('gm-week-select').onchange = (e) => { state.week = e.target.value; refreshView(); };
     const closeModal = () => document.getElementById('gm-modal-overlay').remove();
     document.getElementById('gm-modal-close').onclick = closeModal;
     document.getElementById('gm-modal-overlay').onclick = (e) => { if (e.target.id === 'gm-modal-overlay') closeModal(); };
-
+    
     document.getElementById('gm-btn-clear-all').onclick = () => {
         const targetName = state.semester === 'all' ? '所有' : state.semester;
         if (confirm(`⚠️ 确定要取消关注【${targetName}】下的所有课程吗？`)) {
@@ -1816,7 +1816,7 @@ function handleShowFollowedClick() {
             else refreshView();
         }
     };
-
+    
     const btnContainer = document.querySelector('.gm-modal-body');
     btnContainer.addEventListener('click', (e) => {
         if (e.target.classList.contains('gm-btn-unfollow')) {
@@ -1824,21 +1824,21 @@ function handleShowFollowedClick() {
             if(confirm('确定不再关注此课程吗？')) {
                 // 1. 从存储中移除
                 FollowManager.remove(id);
-
+    
                 // 2. 重新从存储读取最新全量列表
                 courseList = Object.values(FollowManager.getList());
-
+    
                 // 3. 刷新视图 (ViewRenderer 会自动处理空列表的情况)
                 refreshView();
             }
         }
     });
-
+    
     refreshView();
 }
-
+    
 // ----------------- 2.2 导出成绩 -----------------
-
+    
 function initExportUI() {
     if (!document.getElementById('export-ui-styles')) {
         const style = document.createElement("style");
@@ -1867,21 +1867,21 @@ function initExportUI() {
     bgOverlay.addEventListener('click', () => { semesterCheckboxContainer.style.display = "none"; });
     Object.defineProperty(semesterCheckboxContainer.style, 'display', { set: function(val) { bgOverlay.style.display = val; this.setProperty('display', val); }, get: function() { return this.getPropertyValue('display'); } });
 }
-
+    
 function showSemesterCheckboxes(semesterNames) {
     if (!document.getElementById('export-ui-styles')) {
         injectExportStyles(); // 封装样式注入逻辑
     }
-
+    
     Logger.log("2.2", "开始导出成绩...");
     semesterCheckboxContainer.innerHTML = "";
     const title = document.createElement("h3");
     title.textContent = "选择要导出的学期";
     semesterCheckboxContainer.appendChild(title);
-
+    
     const listDiv = document.createElement("div");
     listDiv.className = "gm-semester-list";
-
+    
     semesterNames.forEach((semesterName) => {
         const label = document.createElement("label");
         label.className = "gm-semester-item";
@@ -1894,10 +1894,10 @@ function showSemesterCheckboxes(semesterNames) {
         listDiv.appendChild(label);
     });
     semesterCheckboxContainer.appendChild(listDiv);
-
+    
     const buttonContainer = document.createElement("div");
     buttonContainer.className = "button-container";
-
+    
     const selectAllButton = document.createElement("button");
     selectAllButton.textContent = "全选/反选";
     selectAllButton.className = "select-all-button";
@@ -1906,12 +1906,12 @@ function showSemesterCheckboxes(semesterNames) {
         const isAllChecked = Array.from(checkboxes).every(c => c.checked);
         checkboxes.forEach(c => { c.checked = !isAllChecked; });
     };
-
+    
     const cancelButton = document.createElement("button");
     cancelButton.textContent = "取消";
     cancelButton.className = "cancel-button";
     cancelButton.onclick = () => { semesterCheckboxContainer.style.display = "none"; };
-
+    
     const confirmExportButton = document.createElement("button");
     confirmExportButton.textContent = "导出至 Excel";
     confirmExportButton.className = "confirm-export-button";
@@ -1924,15 +1924,15 @@ function showSemesterCheckboxes(semesterNames) {
         }
         semesterCheckboxContainer.style.display = "none";
     };
-
+    
     buttonContainer.appendChild(selectAllButton);
     buttonContainer.appendChild(cancelButton);
     buttonContainer.appendChild(confirmExportButton);
     semesterCheckboxContainer.appendChild(buttonContainer);
-
+    
     semesterCheckboxContainer.style.display = "block";
 }
-
+    
 async function exportToExcel(filteredGrades) {
     if (!filteredGrades || filteredGrades.length === 0) { alert("没有选中任何成绩数据，已取消导出。"); return; }
     try {
@@ -1956,20 +1956,20 @@ async function exportToExcel(filteredGrades) {
         saveAs(blob, '课程成绩与排名.xlsx');
     } catch (error) { Logger.error('2.2', 'Excel生成失败', error); alert("导出Excel文件时发生错误，请查看控制台了解详情。"); }
 }
-
+    
 // ----------------- 2.3 GPA分析 -----------------
-
+    
 function calculateAndDisplayGPA(data) {
     Logger.log("2.3", "开始进行GPA及加权成绩分析...");
     const { allGrades, gpaRankData } = data;
     if (!allGrades || allGrades.length === 0) { alert("没有可供分析的成绩数据。"); return; }
-
+    
     const chineseGradeMap = { '优秀': 4.0, '良好': 3.0, '中等': 2.0, '及格': 1.3, '不及格': 0.0, '通过': null, '不通过': 0.0 };
     const stuckGradesMap = { 94: 4.1, 89: 3.9, 84: 3.7, 80: 3.3, 77: 2.7, 74: 2.3, 71: 2.0, 67: 2.0, 63: 1.7, 59: 1.3 };
     const validGradesForGpa = [];
     let totalScoreCreditsNumericOnly = 0, totalCreditsNumericOnly = 0;
     let totalScoreCreditsWithMapping = 0, totalCreditsWithMapping = 0;
-
+    
     allGrades.forEach(grade => {
         const credits = parseFloat(grade['学分']); const score = grade['成绩']; let gp = parseFloat(grade['绩点']);
         if (isNaN(credits) || credits <= 0 || grade['绩点'] === null || isNaN(gp)) return;
@@ -1980,16 +1980,16 @@ function calculateAndDisplayGPA(data) {
         if (!isNaN(numericScore)) { totalScoreCreditsNumericOnly += numericScore * credits; totalCreditsNumericOnly += credits; }
         if (!isNaN(numericScore)) { totalScoreCreditsWithMapping += numericScore * credits; totalCreditsWithMapping += credits; } else if (typeof score === 'string' && GRADE_MAPPING_CONFIG.hasOwnProperty(score)) { totalScoreCreditsWithMapping += GRADE_MAPPING_CONFIG[score] * credits; totalCreditsWithMapping += credits; }
     });
-
+    
     const weightedScoreNumeric = totalCreditsNumericOnly > 0 ? (totalScoreCreditsNumericOnly / totalCreditsNumericOnly) : 0;
     const weightedScoreWithMapping = totalCreditsWithMapping > 0 ? (totalScoreCreditsWithMapping / totalCreditsWithMapping) : 0;
     if (validGradesForGpa.length === 0) { alert("未找到可用于计算GPA的有效课程成绩。"); return; }
-
+    
     const totalCreditPoints = validGradesForGpa.reduce((sum, g) => sum + (g['绩点'] * g['学分']), 0);
     const totalCredits = validGradesForGpa.reduce((sum, g) => sum + g['学分'], 0);
     const gpa = totalCredits > 0 ? (totalCreditPoints / totalCredits) : 0;
     const stuckCourses = validGradesForGpa.filter(g => stuckGradesMap.hasOwnProperty(parseFloat(g['成绩'])));
-
+    
     let reportData = { gpa: gpa.toFixed(4), totalCredits: totalCredits.toFixed(2), totalCreditPoints: totalCreditPoints.toFixed(4), courseCount: validGradesForGpa.length, hasStuckCourses: stuckCourses.length > 0, weightedScoreNumeric: weightedScoreNumeric.toFixed(4), weightedScoreWithMapping: weightedScoreWithMapping.toFixed(4), gpaRankData: gpaRankData };
     if (reportData.hasStuckCourses) {
         const stuckCoursesCredits = stuckCourses.reduce((sum, c) => sum + c['学分'], 0);
@@ -1999,11 +1999,11 @@ function calculateAndDisplayGPA(data) {
     }
     showGpaReportModal(reportData);
 }
-
+    
 function showGpaReportModal(reportData) {
     const existingOverlay = document.querySelector('.gpa-report-overlay');
     if (existingOverlay) existingOverlay.remove();
-
+    
     const styleId = 'gpa-report-modal-styles';
     if (!document.getElementById(styleId)) {
         const style = document.createElement("style");
@@ -2018,17 +2018,17 @@ function showGpaReportModal(reportData) {
             .gpa-modal-body { padding: 24px; overflow-y: auto; background-color: #f5f7fa; }
             .gpa-modal-body::-webkit-scrollbar { width: 6px; }
             .gpa-modal-body::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 3px; }
-
+    
             .gpa-modal-grid { display: flex; gap: 20px; align-items: flex-start; }
             .gpa-column-left { flex: 5.5; display: flex; flex-direction: column; gap: 16px; }
             .gpa-column-right { flex: 4.5; display: flex; flex-direction: column; gap: 16px; }
-
+    
             .current-gpa-module { background: #fff; border: 1px solid #ebeef5; border-radius: 8px; padding: 20px; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.02); }
             .gpa-report-modal h3 { margin: 0 0 15px 0; font-size: 16px; color: #303133; display: flex; align-items: center; }
             .gpa-report-modal h3::before { content: ''; display: inline-block; width: 4px; height: 16px; background: #409EFF; margin-right: 8px; border-radius: 2px; }
             .gpa-report-modal p, .gpa-report-modal li { font-size: 14px; line-height: 1.8; color: #606266 !important; margin-bottom: 0;}
             .gpa-report-modal strong { color: #303133; font-weight: 600; }
-
+    
             .gpa-report-modal details { border: 1px solid #ebeef5; border-radius: 8px; background-color: #fff; overflow: hidden; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.02); }
             .gpa-report-modal summary { padding: 14px 18px; font-weight: 600; font-size: 15px; color: #303133; cursor: pointer; list-style: none; outline: none; transition: background 0.2s; user-select: none; }
             .gpa-report-modal summary:hover { background: #f0f7ff; color: #409EFF; }
@@ -2036,7 +2036,7 @@ function showGpaReportModal(reportData) {
             .gpa-report-modal summary::before { content: '▶'; margin-right: 10px; font-size: 12px; display: inline-block; transition: transform 0.2s; color: #909399; }
             .gpa-report-modal details[open] > summary::before { transform: rotate(90deg); }
             .gpa-report-modal details[open] > summary { border-bottom: 1px solid #ebeef5; background: #fafafa; }
-
+    
             .gpa-calc-card { background: #fff; border: 1px solid #ebeef5; border-radius: 8px; padding: 20px; box-shadow: 0 2px 12px 0 rgba(0,0,0,0.02); }
             .gpa-calc-card h4 { margin: 0 0 16px 0; font-size: 15px; color: #303133; font-weight: 600; display: flex; align-items: center; gap: 8px;}
             .input-group { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 15px; gap: 6px; }
@@ -2046,7 +2046,7 @@ function showGpaReportModal(reportData) {
             .calculate-btn { width: 100%; padding: 10px; background-color: #409EFF; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; margin-top: 5px; transition: background 0.2s; }
             .calculate-btn:hover { background-color: #66b1ff; }
             .prediction-result { margin-top: 15px; font-weight: bold; text-align: center; font-size: 15px; min-height: 24px; color: #303133; background: #f0f9eb; padding: 12px; border-radius: 6px; display: none; }
-
+    
             .gpa-report-modal .tooltip-q { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; background-color: #c0c4cc; color: white; font-size: 12px; cursor: help; margin-left: 6px; position: relative; }
             .gpa-report-modal .tooltip-q:hover::after { content: attr(data-gm-tooltip); position: absolute; left: 50%; bottom: 130%; transform: translateX(-50%); background-color: #303133; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 12px; font-weight: normal; white-space: pre-line; z-index: 10; width: max-content; max-width: 280px; line-height: 1.4; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
             .disclaimer { font-size: 12px; color: #909399; margin-top: 20px; text-align: center; padding-top: 15px; border-top: 1px dashed #ebeef5; }
@@ -2054,15 +2054,15 @@ function showGpaReportModal(reportData) {
         `;
         document.head.appendChild(style);
     }
-
+    
     const mappingConfigString = Object.entries(GRADE_MAPPING_CONFIG).map(([key, value]) => `${key}: ${value}`).join(', ');
     const tooltipTextWithMapping = `使用百分制成绩和中文等级制分数进行计算\n您可以在脚本最上面配置参数，当前参数：\n${mappingConfigString}。`;
-
+    
     const overlay = document.createElement('div');
     overlay.className = 'gpa-report-overlay';
     const modal = document.createElement('div');
     modal.className = 'gpa-report-modal';
-
+    
     let contentHTML = `
         <div class="gpa-modal-header">
             <div class="gpa-modal-title">∑ GPA综合分析报告</div>
@@ -2070,7 +2070,7 @@ function showGpaReportModal(reportData) {
         </div>
         <div class="gpa-modal-body">
             <div class="gpa-modal-grid">
-
+    
                 <div class="gpa-column-left">
                     <div class="current-gpa-module">
                         <h3>当前学业总览</h3>
@@ -2090,7 +2090,7 @@ function showGpaReportModal(reportData) {
                         <summary>卡绩分析</summary>
                         <div class="details-content" style="padding: 18px;">
     `;
-
+    
     if (reportData.hasStuckCourses) {
         let stuckCoursesListHTML = '<ul style="padding-left: 20px; margin: 10px 0;">';
         reportData.stuckCoursesList.forEach(course => {
@@ -2109,12 +2109,12 @@ function showGpaReportModal(reportData) {
     } else {
         contentHTML += `<p style="color:#67C23A; font-weight:bold; text-align:center; padding: 10px 0;">[ 恭喜您！当前未发现卡绩科目 ]</p>`;
     }
-
+    
     contentHTML += `
                         </div>
                     </details>
                 </div>
-
+    
                 <div class="gpa-column-right">
                     <div class="gpa-calc-card">
                         <h4>
@@ -2132,7 +2132,7 @@ function showGpaReportModal(reportData) {
                         <button id="calculate-prediction-btn-a" class="calculate-btn">计算预测结果</button>
                         <div id="predicted-gpa-result-a" class="prediction-result"></div>
                     </div>
-
+    
                     <div class="gpa-calc-card">
                         <h4>
                             <svg viewBox="0 0 24 24" width="18" height="18" stroke="#67C23A" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
@@ -2150,33 +2150,33 @@ function showGpaReportModal(reportData) {
                         <div id="target-gpa-result-b" class="prediction-result"></div>
                     </div>
                 </div>
-
+    
             </div>
             <p class="disclaimer">温馨提示：此结果仅供参考，基于所有已获取的成绩数据计算，可能与教务系统保研/评奖评优所用最终规则略有差异。</p>
         </div>
     `;
-
+    
     modal.innerHTML = contentHTML;
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
-
+    
     const close = () => {
         overlay.style.opacity = '0';
         setTimeout(() => document.body.removeChild(overlay), 200);
     };
     overlay.querySelector('.gpa-close-btn').onclick = close;
     overlay.onclick = (e) => { if (e.target === overlay) close(); };
-
+    
     const calculateBtnA = document.getElementById('calculate-prediction-btn-a');
     const nextCreditsInputA = document.getElementById('next-credits-a');
     const nextGpaInputA = document.getElementById('next-gpa-a');
     const resultDisplayA = document.getElementById('predicted-gpa-result-a');
-
+    
     calculateBtnA.addEventListener('click', () => {
         const nextCredits = parseFloat(nextCreditsInputA.value);
         const nextGpa = parseFloat(nextGpaInputA.value);
         resultDisplayA.style.display = 'block';
-
+    
         if (isNaN(nextCredits) || nextCredits <= 0 || isNaN(nextGpa) || nextGpa < 1.0 || nextGpa > 4.1) {
             resultDisplayA.textContent = '⚠️ 请输入有效的学分与GPA\n(GPA应在1.0-4.1之间)';
             resultDisplayA.style.color = '#F56C6C';
@@ -2186,22 +2186,22 @@ function showGpaReportModal(reportData) {
         const currentTotalCredits = parseFloat(reportData.totalCredits);
         const currentTotalCreditPoints = parseFloat(reportData.totalCreditPoints);
         const predictedOverallGPA = (currentTotalCreditPoints + (nextCredits * nextGpa)) / (currentTotalCredits + nextCredits);
-
+    
         resultDisplayA.style.color = '#303133';
         resultDisplayA.style.background = '#f0f9eb';
         resultDisplayA.innerHTML = `总GPA将变为<br><span style="color: #67C23A; font-size: 22px;">${predictedOverallGPA.toFixed(4)}</span>`;
     });
-
+    
     const calculateBtnB = document.getElementById('calculate-target-btn-b');
     const targetGpaInputB = document.getElementById('target-gpa-b');
     const nextCreditsInputB = document.getElementById('next-credits-b');
     const resultDisplayB = document.getElementById('target-gpa-result-b');
-
+    
     calculateBtnB.addEventListener('click', () => {
         const targetGpa = parseFloat(targetGpaInputB.value);
         const nextCredits = parseFloat(nextCreditsInputB.value);
         resultDisplayB.style.display = 'block';
-
+    
         if (isNaN(targetGpa) || targetGpa < 1.0 || targetGpa > 4.1 || isNaN(nextCredits) || nextCredits <= 0) {
             resultDisplayB.textContent = '⚠️ 请输入有效的学分与期望GPA';
             resultDisplayB.style.color = '#F56C6C';
@@ -2212,9 +2212,9 @@ function showGpaReportModal(reportData) {
         const currentTotalCreditPoints = parseFloat(reportData.totalCreditPoints);
         const requiredCreditPointsNext = (targetGpa * (currentTotalCredits + nextCredits)) - currentTotalCreditPoints;
         const requiredGpaNext = requiredCreditPointsNext / nextCredits;
-
+    
         let resultHTML = `剩余课程均绩需达到<br><span style="font-size: 22px; color: ${requiredGpaNext > 4.1 ? '#F56C6C' : '#67C23A'};">${requiredGpaNext.toFixed(4)}</span>`;
-
+    
         if (requiredGpaNext > 4.1) {
             resultHTML += '<br><span style="color: #F56C6C; font-size: 13px; font-weight:normal;">(目标过高，当前评分体系无法实现)</span>';
             resultDisplayB.style.background = '#fef0f0';
@@ -2224,14 +2224,14 @@ function showGpaReportModal(reportData) {
         } else {
             resultDisplayB.style.background = '#f0f9eb';
         }
-
+    
         resultDisplayB.style.color = '#303133';
         resultDisplayB.innerHTML = resultHTML;
     });
 }
-
+    
 // ----------------- 2.4 学生画像增强 -----------------
-
+    
 function precomputeAllWeightedScores(allGrades) {
     if (!allGrades) return {};
     const scoresBySemester = {}; const gradesBySemester = {};
@@ -2249,7 +2249,7 @@ function precomputeAllWeightedScores(allGrades) {
     scoresBySemester['全部'] = { weightedScore: calculate(allGrades), tooltipText: `所有学期加权百分制成绩\n(不含PNP和中文等级制成绩)` };
     return scoresBySemester;
 }
-
+    
 function injectTooltipStylesForPortrait() {
     const styleId = 'gm-tooltip-styles-portrait'; if (document.getElementById(styleId)) return;
     const style = document.createElement('style'); style.id = styleId;
@@ -2274,18 +2274,18 @@ function injectTooltipStylesForPortrait() {
     `;
     document.head.appendChild(style);
 }
-
+    
 function updateSummaryTilesForPortrait(data, scoreContentElement, weightedScores) {
     if (!scoreContentElement || !ConfigManager.enablePortraitEnhancement) return;
-
+    
     const infoDivs = Array.from(scoreContentElement.querySelectorAll('.info'));
     const avgScoreLabel = infoDivs.find(el => el.textContent.includes("平均分") || el.textContent.includes("加权分") || el.dataset.originalHtml);
     if (!avgScoreLabel) return;
-
+    
     const majorRankTileId = 'gm-major-rank-tile';
     let rankTile = document.getElementById(majorRankTileId);
     let avgScoreTile = avgScoreLabel.closest('.score-item');
-
+    
     const semInput = document.querySelector('.myScore .el-select .el-input__inner');
     const currentSem = semInput ? (semInput.value || '全部') : '全部';
     const currentScoreData = weightedScores[currentSem] || {
@@ -2293,7 +2293,7 @@ function updateSummaryTilesForPortrait(data, scoreContentElement, weightedScores
         tooltipText: data ? '未找到成绩' : '正在拉取成绩与计算中...'
     };
     const currentRankValue = data ? (data.gpaRankData?.rank ?? '无数据') : '获取中...';
-
+    
     if (scoreContentElement.dataset.gmEnhancedSummary === 'true') {
         if (avgScoreTile) {
             const scoreValDiv = avgScoreTile.querySelector('.score');
@@ -2311,7 +2311,7 @@ function updateSummaryTilesForPortrait(data, scoreContentElement, weightedScores
         }
         return;
     }
-
+    
     // --- 初次构建 DOM ---
     if (avgScoreTile) {
         avgScoreTile.id = 'gm-weighted-score-tile';
@@ -2320,7 +2320,7 @@ function updateSummaryTilesForPortrait(data, scoreContentElement, weightedScores
         const scoreValDiv = avgScoreTile.querySelector('.score');
         if (scoreValDiv) scoreValDiv.textContent = currentScoreData.weightedScore;
     }
-
+    
     if (!rankTile) {
         rankTile = document.createElement('li');
         rankTile.id = majorRankTileId;
@@ -2329,41 +2329,41 @@ function updateSummaryTilesForPortrait(data, scoreContentElement, weightedScores
         rankTile.innerHTML = `<div class="icon-img"><i class="iconfont icon-paiming2"></i></div><div class="score-info"><div class="score">${currentRankValue}</div><div class="info">专业排名 <i class="iconfont icon-bangzhu gm-tooltip-trigger" data-gm-tooltip="排名数据来自教务系统\n若无则显示'无数据'"></i></div>`;
         scoreContentElement.appendChild(rankTile);
     }
-
+    
     scoreContentElement.dataset.gmEnhancedSummary = 'true';
 }
-
+    
 function enhanceScoreTrendChart(data, weightedScores, forceRebuild = false) {
     if (!ConfigManager.enablePortraitEnhancement) return;
-
+    
     const chartContainer = document.getElementById('semesterScoreLine');
     if (!chartContainer) return;
-
+    
     const cardBody = chartContainer.closest('.el-card__body');
     const header = cardBody ? cardBody.querySelector('.header') : null;
     if (!header) return;
-
+    
     const existingBtn = header.querySelector('.gm-trend-toggle-btn');
     const existingPanel = chartContainer.parentNode.querySelector('.gm-trend-detail-panel');
-
+    
     // 正常观察模式下，如果有缓存且没要求强制重绘，直接跳过
     if (!forceRebuild && existingBtn && existingPanel && header.dataset.gmEnhancedTrend === 'true') {
         return;
     }
-
+    
     // 强制重绘时，彻底清理旧组件防止双按钮
     if (existingBtn) existingBtn.remove();
     if (existingPanel) existingPanel.remove();
-
+    
     const btn = document.createElement('button');
     btn.className = 'gm-trend-toggle-btn';
     btn.innerHTML = '展开数据';
     header.appendChild(btn);
     header.dataset.gmEnhancedTrend = 'true';
-
+    
     const panel = document.createElement('div');
     panel.className = 'gm-trend-detail-panel';
-
+    
     let html = '';
     // 如果还没获取到数据，渲染占位符
     if (!data) {
@@ -2380,18 +2380,18 @@ function enhanceScoreTrendChart(data, weightedScores, forceRebuild = false) {
                 semesterMap[sem].points += gp * credit;
             }
         });
-
+    
         html = '<div class="gm-trend-grid">';
         const sortedSemesters = data.semesterNames ? [...data.semesterNames].reverse() : Object.keys(semesterMap).sort();
-
+    
         sortedSemesters.forEach(sem => {
             const stats = semesterMap[sem];
             if (!stats) return;
-
+    
             const gpa = stats.credits > 0 ? (stats.points / stats.credits).toFixed(2) : '-';
             const avgData = weightedScores[sem];
             const avg = avgData && avgData.weightedScore !== 'N/A' ? avgData.weightedScore : '-';
-
+    
             html += `
                 <div class="gm-trend-card">
                     <span class="gm-tc-close" title="关闭此项">&times;</span>
@@ -2411,10 +2411,10 @@ function enhanceScoreTrendChart(data, weightedScores, forceRebuild = false) {
         });
         html += '</div>';
     }
-
+    
     panel.innerHTML = html;
     chartContainer.parentNode.insertBefore(panel, chartContainer.nextSibling);
-
+    
     panel.addEventListener('click', (e) => {
         if (e.target.classList.contains('gm-tc-close')) {
             const card = e.target.closest('.gm-trend-card');
@@ -2424,7 +2424,7 @@ function enhanceScoreTrendChart(data, weightedScores, forceRebuild = false) {
             }
         }
     });
-
+    
     btn.onclick = () => {
         const isHidden = !panel.classList.contains('show');
         if (isHidden) {
@@ -2441,7 +2441,7 @@ function enhanceScoreTrendChart(data, weightedScores, forceRebuild = false) {
         }
     };
 }
-
+    
 function getPassStatus(score) {
     const passingGrades = ['优秀', '良好', '中等', '及格', '通过', 'P'];
     const failingGrades = ['不及格', '不通过'];
@@ -2451,63 +2451,63 @@ function getPassStatus(score) {
     if (!isNaN(numericScore)) return numericScore >= 60 ? '<span class="value">通过</span>' : '<span class="value" style="color: #F56C6C">不通过</span>';
     return '';
 }
-
+    
 function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer, forceRebuild = false) {
     if (!data) return; // 无数据时不处理
-
+    
     const enhancedId = 'gm-enhanced-table-wrapper';
     let enhancedContainer = document.getElementById(enhancedId);
-
+    
     if (!ConfigManager.enablePortraitEnhancement) {
         if (enhancedContainer) enhancedContainer.remove();
         originalTableContainer.style.display = '';
         originalTableContainer.removeAttribute('data-gm-enhanced');
         return;
     }
-
+    
     // 正常状态跳过
     if (!forceRebuild && originalTableContainer.dataset.gmEnhanced === 'true' && enhancedContainer) {
         return;
     }
-
+    
     // 热更新时，暴力清空旧表格
     if (enhancedContainer) enhancedContainer.remove();
-
+    
     const outOfPlanCourseCodes = new Set();
     const rows = originalTableContainer.querySelectorAll('.el-table__body-wrapper tbody tr');
     const headerCells = Array.from(originalTableContainer.querySelectorAll('.el-table__header-wrapper th'));
     let codeIndex = headerCells.findIndex(th => th.textContent.trim().includes('课程代码'));
     if (codeIndex === -1) return;
-
+    
     rows.forEach(row => {
         const cells = row.querySelectorAll('td');
         if (cells[codeIndex]) outOfPlanCourseCodes.add(cells[codeIndex].textContent.trim());
     });
-
+    
     if (outOfPlanCourseCodes.size === 0) return;
-
+    
     const outOfPlanGrades = data.allGrades.filter(grade => outOfPlanCourseCodes.has(grade['课程代码']));
     const classRankMap = new Map(data.allGrades.map(g => [g['课程代码'], g['教学班排名']]));
-
+    
     const totalCredits = outOfPlanGrades.reduce((sum, g) => sum + parseFloat(g['学分'] || 0), 0);
     const passedCredits = outOfPlanGrades.reduce((sum, g) => {
         const statusHtml = getPassStatus(g['成绩']);
         return (statusHtml.includes('通过') && !statusHtml.includes('不')) ? sum + parseFloat(g['学分'] || 0) : sum;
     }, 0);
     const failedCredits = totalCredits - passedCredits;
-
+    
     const originalHandler = originalTableContainer.querySelector('.node-handler');
     let paddingLeft = '20px';
     if (originalHandler && originalHandler.style.paddingLeft) paddingLeft = originalHandler.style.paddingLeft;
-
+    
     enhancedContainer = document.createElement('div');
     enhancedContainer.id = enhancedId;
     enhancedContainer.className = 'node-wrapper courseTreeNode marginBottom';
     originalTableContainer.insertAdjacentElement('afterend', enhancedContainer);
-
+    
     const colGroupHTML = `<colgroup><col width="48"><col width="200"><col width="100"><col width="120"><col width="80"><col width="60"><col width="60"><col width="60"><col width="100"><col width="80"></colgroup>`;
     const headerHTML = `<div class="el-table__header-wrapper"><table cellspacing="0" cellpadding="0" border="0" class="el-table__header" style="width: 100%;">${colGroupHTML}<thead class="has-gutter"><tr class="table-header"><th class="is-leaf" width="50"><div class="cell">序号</div></th><th class="is-leaf"><div class="cell">课程名称</div></th><th class="is-leaf" width="100"><div class="cell">课程代码</div></th><th class="is-leaf" width="120"><div class="cell">学年学期</div></th><th class="is-leaf" width="80"><div class="cell">是否必修</div></th><th class="is-leaf" width="60"><div class="cell">学分</div></th><th class="is-leaf" width="60"><div class="cell">成绩</div></th><th class="is-leaf" width="60"><div class="cell">绩点</div></th><th class="is-leaf" width="100"><div class="cell">教学班排名</div></th><th class="is-leaf" width="80"><div class="cell">是否通过</div></th></tr></thead></table></div>`;
-
+    
     const tableBodyRows = outOfPlanGrades.map((grade, index) => {
         const score = grade['成绩'];
         const isFail = parseFloat(score) < 60 && !isNaN(parseFloat(score));
@@ -2515,11 +2515,11 @@ function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer, f
         const passStatus = getPassStatus(score);
         return `<tr class="el-table__row"><td class="cell-style"><div class="cell">${index + 1}</div></td><td class="cell-style"><div class="cell el-tooltip"><span class="value">${grade['课程名称'] || ''}</span></div></td><td class="cell-style"><div class="cell el-tooltip">${grade['课程代码'] || ''}</div></td><td class="cell-style"><div class="cell el-tooltip">${grade['学期'] || ''}</div></td><td class="cell-style"><div class="cell el-tooltip"><span class="value">${grade['是否必修'] ? '是' : '否'}</span></div></td><td class="cell-style"><div class="cell el-tooltip">${grade['学分'] || ''}</div></td><td class="cell-style"><div class="cell el-tooltip" style="${scoreStyle}">${grade['成绩'] || ''}</div></td><td class="cell-style"><div class="cell el-tooltip">${grade['绩点'] ?? ''}</div></td><td class="cell-style"><div class="cell el-tooltip"><span class="value">${classRankMap.get(grade['课程代码']) || '-'}</span></div></td><td class="cell-style"><div class="cell el-tooltip">${passStatus}</div></td></tr>`;
     }).join('');
-
+    
     const bodyHTML = `<div class="el-table__body-wrapper is-scrolling-left"><table cellspacing="0" cellpadding="0" border="0" class="el-table__body" style="width: 100%;">${colGroupHTML}<tbody>${tableBodyRows}</tbody></table></div>`;
-
+    
     enhancedContainer.innerHTML = `<div class="node-handler background" style="padding-left: ${paddingLeft}; cursor: pointer;"><div class="arrow"></div><div class="title"><div class="course-name">计划外课程</div><div class="require-item"><span class="score">学分：</span><span class="con">共 ${totalCredits} | 已通过 ${passedCredits} | 未通过 </span><span class="unpassed">${failedCredits}</span></div></div></div><div class="node-child-wrapper none"><div class="node-child"><div class="child"><div class="el-table el-table--fit el-table--enable-row-hover el-table--enable-row-transition el-table--small" style="width: 100%;">${headerHTML}${bodyHTML}</div></div></div></div>`;
-
+    
     const handler = enhancedContainer.querySelector('.node-handler');
     const wrapper = enhancedContainer.querySelector('.node-child-wrapper');
     const arrow = enhancedContainer.querySelector('.arrow');
@@ -2527,53 +2527,53 @@ function createEnhancedOutOfPlanTableForPortrait(data, originalTableContainer, f
         if (wrapper.classList.contains('none')) { wrapper.classList.remove('none'); arrow.classList.add('up'); }
         else { wrapper.classList.add('none'); arrow.classList.remove('up'); }
     });
-
+    
     originalTableContainer.style.display = 'none';
     originalTableContainer.dataset.gmEnhanced = 'true';
 }
-
+    
 async function enhancePortraitPage() {
     while (!document.body || !document.querySelector(".score-content")) { await new Promise(resolve => setTimeout(resolve, 50)); }
     Logger.log("2.4", "脚本已在学生画像页激活");
     injectTooltipStylesForPortrait();
-
+    
     // 声明状态
     let currentData = getCachedData();
     let currentWeightedScores = currentData ? precomputeAllWeightedScores(currentData.allGrades) : {};
-
+    
     // 渲染方法 (常规调配)
     const renderAllComponents = () => {
         if (!ConfigManager.enablePortraitEnhancement) return;
         const scoreContent = document.querySelector(".score-content");
         if (scoreContent) updateSummaryTilesForPortrait(currentData, scoreContent, currentWeightedScores);
-
+    
         const outOfPlanTable = document.querySelector('.outPlanTable');
         if (outOfPlanTable && outOfPlanTable.querySelector('.el-table__body-wrapper tbody tr')) {
             createEnhancedOutOfPlanTableForPortrait(currentData, outOfPlanTable);
         }
-
+    
         enhanceScoreTrendChart(currentData, currentWeightedScores);
     };
-
+    
     // 热更新方法 (数据到达后，强制推翻重建)
     const triggerHotUpdate = () => {
         Logger.log("2.4", "执行热更新...");
         const scoreContent = document.querySelector(".score-content");
         if (scoreContent) updateSummaryTilesForPortrait(currentData, scoreContent, currentWeightedScores);
-
+    
         const outOfPlanTable = document.querySelector('.outPlanTable');
         if (outOfPlanTable && outOfPlanTable.querySelector('.el-table__body-wrapper tbody tr')) {
             createEnhancedOutOfPlanTableForPortrait(currentData, outOfPlanTable, true); // 传递 true 强制更新
         }
-
+    
         enhanceScoreTrendChart(currentData, currentWeightedScores, true); // 传递 true 强制更新
     };
-
+    
     // ============ 执行流程 ============
-
+    
     // 1. 立即挂载（无论有无缓存均立即展示界面骨架）
     renderAllComponents();
-
+    
     // 2. 异步请求数据不阻塞主线程，一旦完成，延后 100ms（避开Vue更新冲突）执行热更新
     fetchAllDataAndCache().then(freshData => {
         currentData = freshData;
@@ -2582,12 +2582,12 @@ async function enhancePortraitPage() {
     }).catch(err => {
         Logger.error("2.4", "静默获取成绩失败:", err);
     });
-
+    
     // 3. 监听 Vue 的原生 DOM 修改，并在学期下拉框变更时自动更新卡片
     window._gm_last_portrait_sem = null;
     const observer = new MutationObserver(() => {
         if (!ConfigManager.enablePortraitEnhancement) return;
-
+    
         const semInput = document.querySelector('.myScore .el-select .el-input__inner');
         if (semInput) {
             const currentSem = semInput.value || '全部';
@@ -2596,19 +2596,15 @@ async function enhancePortraitPage() {
                 updateSummaryTilesForPortrait(currentData, document.querySelector(".score-content"), currentWeightedScores);
             }
         }
-
+    
         // 常规容错：如果 Vue 刷新掉了组件，自动补回
         renderAllComponents();
     });
-
+    
     observer.observe(document.body, { childList: true, subtree: true });
 }
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.5 全校开课查询页选课记录 =-=-=-=-=-=-=-=-=-=-=-=-=
-/**
- * 全校开课查询页面增强模块
- * 包含：历史记录显示、控制面板UI、自动翻页同步逻辑
- */
 const LessonSearchEnhancer = {
     // 配置常量
     CONFIG: {
@@ -2619,53 +2615,104 @@ const LessonSearchEnhancer = {
         LOADER: 'td.dataTables_empty',
         TABLE_ROWS: '#table tbody tr'
     },
-
+    
     init() {
-        // 1. 路径检查
         if (!window.location.href.includes('/student/for-std/lesson-search')) return;
-
-        // 2. 强制等待分页栏(.page-config)出现
-        // 如果页面核心组件没加载出来，每300ms重试一次，直到出现为止
         if (!document.querySelector('.page-config') || !document.querySelector('#table')) {
             setTimeout(() => this.init(), 300);
             return;
         }
-
+    
         Logger.log("2.5", "初始化选课记录模块...");
-
-        // 3. 初始化UI
         this.injectControlPanel();
         this.renderHistoryTags();
-
-        // 4. 自动同步触发逻辑
-        // 必须在页面完全就绪后才消耗掉 sessionStorage 的标记
-        if (sessionStorage.getItem('nwpu_course_sync_trigger') === 'true') {
-
-            // 检查：如果表格还在转圈加载中(dataTables_empty)，则继续等待，暂不执行
-            if (document.querySelector('td.dataTables_empty')) {
-                setTimeout(() => this.init(), 500);
+    
+        // 定时器智能提取学期列表：等待原网页 AJAX 加载完毕
+        let retryCount = 0;
+        const populateTimer = setInterval(() => {
+            retryCount++;
+            const gmSelect = document.getElementById('gm-sync-semester');
+            if (!gmSelect) {
+                clearInterval(populateTimer);
                 return;
             }
-
-            console.log("[NWPU-Enhanced] 页面就绪，准备执行自动同步...");
-            sessionStorage.removeItem('nwpu_course_sync_trigger'); // 消耗标记
-
-            // 延迟 1秒 确保视觉上页面稳定，然后启动
-            setTimeout(() => {
-                this.startSyncProcess(true);
-            }, 1000);
-        }
-
-        // 5. 启动观察者
-        const observer = new MutationObserver(() => this.renderHistoryTags());
+    
+            let extractedOptions = [];
+            try {
+                const selectEl = document.getElementById('semester');
+                if (selectEl && selectEl.selectize && selectEl.selectize.options) {
+                    const opts = selectEl.selectize.options;
+                    extractedOptions = Object.values(opts).map(o => ({ value: o.value, text: o.text || o.nameZh }));
+                } else if (typeof unsafeWindow !== 'undefined' && unsafeWindow.$) {
+                    const jqEl = unsafeWindow.$('#semester');
+                    if (jqEl.length > 0 && jqEl[0].selectize && jqEl[0].selectize.options) {
+                        const opts = jqEl[0].selectize.options;
+                        extractedOptions = Object.values(opts).map(o => ({ value: o.value, text: o.text || o.nameZh }));
+                    }
+                }
+            } catch (e) {}
+    
+            if (extractedOptions.length === 0) {
+                const domOptions = document.querySelectorAll('.selectize-dropdown.semester .option');
+                domOptions.forEach(opt => {
+                    const val = opt.getAttribute('data-value');
+                    const text = opt.innerText.trim();
+                    if (val && text) extractedOptions.push({ value: val, text: text });
+                });
+            }
+    
+            const uniqueOptions = [];
+            const seenVals = new Set();
+            extractedOptions.forEach(opt => {
+                if (!seenVals.has(opt.value) && opt.text && opt.text !== 'undefined') {
+                    seenVals.add(opt.value);
+                    uniqueOptions.push(opt);
+                }
+            });
+    
+            if (uniqueOptions.length > 1) {
+                uniqueOptions.sort((a, b) => parseInt(b.value) - parseInt(a.value));
+                let optionsHtml = '';
+                uniqueOptions.forEach(opt => {
+                    optionsHtml += `<option value="${opt.value}">${opt.text}</option>`;
+                });
+                gmSelect.innerHTML = optionsHtml;
+                this.syncSemesterSelect();
+                clearInterval(populateTimer);
+    
+                if (sessionStorage.getItem('nwpu_course_sync_trigger') === 'true') {
+                    sessionStorage.removeItem('nwpu_course_sync_trigger');
+                    setTimeout(() => { this.startSyncProcess(true); }, 500);
+                }
+            } else if (retryCount > 40) {
+                gmSelect.innerHTML = '<option value="">加载失败，请刷新页面重试</option>';
+                clearInterval(populateTimer);
+            }
+        }, 500);
+    
+        // 启动观察者，页面数据更新时同步历史标签和下拉框学期
+        const observer = new MutationObserver(() => {
+            this.renderHistoryTags();
+            this.syncSemesterSelect();
+        });
         const target = document.querySelector('#table') || document.body;
         observer.observe(target, { childList: true, subtree: true });
     },
-
-    // --- 1. UI: 注入右侧控制面板 ---
+    
+    syncSemesterSelect() {
+        const originalSemester = document.querySelector('.selectize-control.semester .item');
+        const gmSelect = document.getElementById('gm-sync-semester');
+        if (originalSemester && gmSelect && document.activeElement !== gmSelect && gmSelect.options.length > 1) {
+            const semName = originalSemester.innerText.trim();
+            Array.from(gmSelect.options).forEach(opt => {
+                if (opt.text === semName) opt.selected = true;
+            });
+        }
+    },
+    
     injectControlPanel() {
         if (document.getElementById('gm-lesson-helper-panel')) return;
-
+    
         const panel = document.createElement('div');
         panel.id = 'gm-lesson-helper-panel';
         panel.innerHTML = `
@@ -2674,7 +2721,10 @@ const LessonSearchEnhancer = {
                 <span id="gm-panel-close" style="position:absolute; right:10px; color:#999; cursor:pointer; font-size:18px; line-height:1; font-weight:bold;" title="关闭面板 (刷新页面可恢复)">×</span>
             </div>
             <div style="padding:15px;">
-                <button id="gm-btn-sync-start" style="width:100%; padding:8px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold; transition: background 0.2s;">存储当前学期课程信息</button>
+                <select id="gm-sync-semester" style="width:100%; padding:6px; margin-bottom:10px; border-radius:4px; border:1px solid #ccc; font-size:14px; outline:none; cursor:pointer;">
+                    <option value="">加载学期列表中...</option>
+                </select>
+                <button id="gm-btn-sync-start" style="width:100%; padding:8px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold; transition: background 0.2s;">存储选定学期课程信息</button>
                 <button id="gm-btn-clear-hist" style="width:100%; padding:8px; background:#dc3545; color:white; border:none; border-radius:4px; cursor:pointer; margin-top:10px; transition: background 0.2s;">清除所有记录</button>
                 <div style="margin-top:12px; font-size:12px; color:#666; line-height:1.5;">
                     建议在每轮选课开始前执行一次。
@@ -2683,21 +2733,16 @@ const LessonSearchEnhancer = {
         `;
         panel.style.cssText = `position:fixed; top:120px; right:30px; z-index:99999; background:white; border:1px solid #ccc; border-radius:8px; box-shadow:0 4px 12px rgba(0,0,0,0.15); width:240px; font-size:14px; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;`;
         document.body.appendChild(panel);
-
-        // 绑定事件
+    
         const btnSync = document.getElementById('gm-btn-sync-start');
         const btnClear = document.getElementById('gm-btn-clear-hist');
-        const btnClose = document.getElementById('gm-panel-close'); // 获取关闭按钮
-
-        // 关闭功能
-        btnClose.onclick = () => {
-            panel.style.display = 'none';
-        };
-
+        const btnClose = document.getElementById('gm-panel-close');
+    
+        btnClose.onclick = () => { panel.style.display = 'none'; };
         btnSync.onclick = () => this.startSyncProcess(false);
         btnSync.onmouseover = () => btnSync.style.background = '#0056b3';
         btnSync.onmouseout = () => btnSync.style.background = '#007bff';
-
+    
         btnClear.onclick = () => {
             if(confirm('确定清空所有本地存储的课程历史数据吗？')) {
                 GM_setValue(this.CONFIG.HISTORY_KEY, '{}');
@@ -2707,12 +2752,11 @@ const LessonSearchEnhancer = {
         };
         btnClear.onmouseover = () => btnClear.style.background = '#c82333';
         btnClear.onmouseout = () => btnClear.style.background = '#dc3545';
-
-        // 拖拽
+    
         const header = document.getElementById('gm-panel-header');
         let isDragging = false, startX, startY, initialLeft, initialTop;
         header.onmousedown = (e) => {
-            if(e.target === btnClose) return; // 点击关闭时不触发拖拽
+            if(e.target === btnClose) return;
             isDragging = true; startX = e.clientX; startY = e.clientY;
             const rect = panel.getBoundingClientRect(); initialLeft = rect.left; initialTop = rect.top;
         };
@@ -2725,85 +2769,163 @@ const LessonSearchEnhancer = {
         };
         document.onmouseup = () => isDragging = false;
     },
-
+    
     // --- 2. Core: 同步逻辑 ---
     async startSyncProcess(isAuto) {
-        if (!isAuto && !confirm('即将自动操作并开始执行抓取。\n过程可能需要几十秒，请勿关闭页面。')) return;
-
-        const overlay = this.showOverlay();
+        const gmSelect = document.getElementById('gm-sync-semester');
+        if (!gmSelect || gmSelect.options.length <= 1) {
+            alert("学期列表仍在加载中或加载失败，请稍等后再试。");
+            return;
+        }
+    
         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
         const waitForLoad = async () => {
             let limit = 0;
             while(!document.querySelector(this.CONFIG.LOADER) && limit < 20) { await sleep(100); limit++; }
             limit = 0;
-            while(document.querySelector(this.CONFIG.LOADER) && limit < 300) { await sleep(100); limit++; }
+            while(document.querySelector(this.CONFIG.LOADER) &&
+                    !document.querySelector(this.CONFIG.LOADER).innerText.includes('无数据') &&
+                    limit < 300) {
+                await sleep(100); limit++;
+            }
             await sleep(300);
         };
-
+    
+        let targetSemesterName = '';
+        let overlay = null;
+    
         try {
-            const sizeBtn = document.querySelector(this.CONFIG.PAGE_SIZE_BTN);
-            if(sizeBtn) {
-                if(!sizeBtn.innerText.includes('1000')) {
-                    this.updateOverlayStatus("正在切换每页显示数量...");
-                    sizeBtn.click();
-                    await sleep(500);
-                    const maxOpt = document.querySelector(this.CONFIG.PAGE_SIZE_1000);
-                    if(maxOpt) {
-                        maxOpt.click();
-                        await sleep(500);
+            // 【自动模式】：寻找最新有数据的学期
+            if (isAuto) {
+                overlay = this.showOverlay("正在寻找最新有数据的学期...");
+                let foundValid = false;
+                const optionsList = Array.from(gmSelect.options).filter(o => o.value);
+    
+                for (let i = 0; i < optionsList.length; i++) {
+                    const opt = optionsList[i];
+                    this.updateOverlayStatus(`正在检测: ${opt.text}...`);
+    
+                    const semesterInput = document.querySelector('.selectize-control.semester .selectize-input');
+                    if (semesterInput) semesterInput.click();
+                    await sleep(400);
+    
+                    const targetEl = document.querySelector(`.selectize-dropdown-content .option[data-value="${opt.value}"]`);
+                    if (targetEl) {
+                        targetEl.click();
+                        await waitForLoad();
+                    }
+    
+                    const emptyNode = document.querySelector(this.CONFIG.LOADER);
+                    if (emptyNode && emptyNode.innerText.includes('无数据')) {
+                        Logger.log("2.5", `学期 ${opt.text} 为空，跳过`);
+                        continue; // 空学期，继续找下一个
+                    } else {
+                        foundValid = true;
+                        targetSemesterName = opt.text;
+                        break; // 找到有数据的学期，跳出循环
+                    }
+                }
+    
+                if (!foundValid) {
+                    alert("未能找到任何包含排课数据的学期，自动同步终止。");
+                    overlay.remove();
+                    return;
+                }
+    
+                // 更新遮罩上的文字为最终锁定的学期
+                const titleEl = document.querySelector('#gm-overlay-target-sem');
+                if (titleEl) titleEl.innerText = `锁定抓取学期: ${targetSemesterName}`;
+            }
+            // 【手动模式】：只抓取用户在下拉框选定的学期
+            else {
+                targetSemesterName = gmSelect.options[gmSelect.selectedIndex].text;
+                const targetSemesterValue = gmSelect.value;
+                if (!confirm(`即将自动操作并开始抓取【${targetSemesterName}】的数据。\n过程可能需要几十秒，请勿关闭页面。`)) return;
+    
+                overlay = this.showOverlay(targetSemesterName);
+    
+                const currentSemesterText = document.querySelector('.selectize-control.semester .item')?.innerText.trim();
+                if (targetSemesterValue && currentSemesterText !== targetSemesterName) {
+                    this.updateOverlayStatus(`正在切换至学期: ${targetSemesterName}...`);
+                    const semesterInput = document.querySelector('.selectize-control.semester .selectize-input');
+                    if (semesterInput) semesterInput.click();
+                    await sleep(400);
+                    const targetOpt = document.querySelector(`.selectize-dropdown-content .option[data-value="${targetSemesterValue}"]`);
+                    if (targetOpt) {
+                        targetOpt.click();
                         await waitForLoad();
                     }
                 }
+    
+                const emptyNode = document.querySelector(this.CONFIG.LOADER);
+                if (emptyNode && emptyNode.innerText.includes('无数据')) {
+                    alert(`【${targetSemesterName}】学期暂无数据，已自动结束抓取。`);
+                    overlay.remove();
+                    return;
+                }
             }
-
+    
+            // --- 此时页面已成功停留在目标学期且有数据，开始翻页提取 ---
+            const sizeBtn = document.querySelector(this.CONFIG.PAGE_SIZE_BTN);
+            if(sizeBtn && !sizeBtn.innerText.includes('1000')) {
+                this.updateOverlayStatus("正在切换每页显示数量...");
+                sizeBtn.click();
+                await sleep(500);
+                const maxOpt = document.querySelector(this.CONFIG.PAGE_SIZE_1000);
+                if(maxOpt) {
+                    maxOpt.click();
+                    await sleep(500);
+                    await waitForLoad();
+                }
+            }
+    
             let page = 1;
             let totalScraped = 0;
             this.updateOverlayStatus(`准备开始抓取...`);
-
+    
             while(true) {
                 const count = this.scrapeCurrentPage();
                 totalScraped += count;
                 this.updateOverlay(totalScraped);
-
+    
                 const nextIcon = document.querySelector(this.CONFIG.NEXT_BTN);
                 const nextBtn = nextIcon ? nextIcon.closest('button') : null;
-
+    
                 if (!nextBtn || nextBtn.disabled || nextBtn.classList.contains('disabled')) break;
-
+    
                 nextBtn.click();
                 page++;
                 await sleep(500);
                 await waitForLoad();
             }
-
-            alert(`同步完成！\n\n共存储 ${totalScraped} 条课程数据。\n页面即将刷新以更新状态。`);
+    
+            alert(`同步完成！\n\n已成功抓取【${targetSemesterName}】学期，共存储 ${totalScraped} 条课程数据。\n页面即将刷新以更新状态。`);
             window.location.reload();
-
+    
         } catch(e) {
             console.error(e);
             alert('同步中断: ' + e.message);
-            overlay.remove();
+            if(overlay) overlay.remove();
         }
     },
-
+    
     // --- 3. Helper: 抓取与存储 ---
     scrapeCurrentPage() {
         const rows = document.querySelectorAll(this.CONFIG.TABLE_ROWS);
         const data = [];
         const timestamp = new Date().toLocaleString('zh-CN', { hour12: false });
-
+    
         rows.forEach(row => {
             if(row.querySelector(this.CONFIG.LOADER)) return;
-
+    
             const idInput = row.querySelector('input[name="model_id"]');
             if(!idInput) return;
             const id = idInput.value;
-
+    
             const codeEl = row.querySelector('.lesson-code');
             const nameEl = row.querySelector('.course-name');
             const countSpan = row.querySelector('span[data-original-title="实际/上限人数"]');
-
+    
             if(countSpan) {
                 const match = countSpan.innerText.match(/(\d+)\/(\d+)/);
                 if(match) {
@@ -2818,69 +2940,63 @@ const LessonSearchEnhancer = {
                 }
             }
         });
-
+    
         if(data.length > 0) this.saveToHistory(data);
         return data.length;
     },
-
+    
     saveToHistory(courseData) {
         let history = {};
         try {
-            // 尝试解析旧数据
             history = JSON.parse(GM_getValue(this.CONFIG.HISTORY_KEY, '{}'));
         } catch (e) {
-            console.warn('[NWPU-Enhanced] 写入时发现历史数据损坏，已自动重置为空');
-            history = {}; // 解析失败则重置，防止阻碍新数据写入
+            history = {};
         }
-
+    
         courseData.forEach(c => {
             if(!history[c.id]) history[c.id] = [];
             const records = history[c.id];
             const last = records[records.length-1];
-            // 只有当人数发生变化时才记录，节省空间
             if(!last || last.stdCount !== c.stdCount || last.limitCount !== c.limitCount) {
                 records.push(c);
             } else {
-                last.time = c.time; // 更新最后检测时间
+                last.time = c.time;
             }
         });
-
-        // 保存回本地
+    
         GM_setValue(this.CONFIG.HISTORY_KEY, JSON.stringify(history));
-        // 刷新界面显示
         this.renderHistoryTags();
     },
-
+    
     // --- 4. UI: 渲染历史标签 ---
     renderHistoryTags() {
         let history = {};
         try {
             history = JSON.parse(GM_getValue(this.CONFIG.HISTORY_KEY, '{}'));
         } catch (e) {
-            console.error('[NWPU-Enhanced] 读取历史记录失败（数据格式错误），已跳过渲染', e);
             GM_setValue(this.CONFIG.HISTORY_KEY, '{}');
             return;
         }
-
+    
         const rows = document.querySelectorAll(this.CONFIG.TABLE_ROWS);
-
+    
         rows.forEach(row => {
             if(row.dataset.gmProcessed) return;
             const idInput = row.querySelector('input[name="model_id"]');
             if(!idInput) return;
-
+    
             const records = history[idInput.value];
             if(records && records.length > 0) {
                 const last = records[records.length-1];
                 const countSpan = Array.from(row.querySelectorAll('span')).find(s => s.getAttribute('data-original-title') === '实际/上限人数');
-
+    
                 if(countSpan && !countSpan.parentNode.querySelector('.gm-hist-tag')) {
                     const tag = document.createElement('span');
                     tag.className = 'gm-hist-tag';
                     const isFull = last.stdCount >= last.limitCount;
                     const bgColor = isFull ? '#fff0f0' : '#e6ffec';
                     const textColor = isFull ? '#d32f2f' : '#1e7e34';
-
+    
                     tag.style.cssText = `font-size:12px; color:${textColor}; background:${bgColor}; padding:1px 5px; border-radius:3px; margin-left:8px; border:1px solid ${textColor}40;`;
                     tag.innerText = `记录:${last.stdCount}/${last.limitCount}`;
                     tag.title = `上次同步时间: ${last.time}`;
@@ -2890,13 +3006,14 @@ const LessonSearchEnhancer = {
             row.dataset.gmProcessed = 'true';
         });
     },
-
-    showOverlay() {
+    
+    showOverlay(semesterName = '当前学期') {
         const div = document.createElement('div');
         div.id = 'gm-sync-overlay';
         div.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:100000; color:white; display:flex; flex-direction:column; align-items:center; justify-content:center;';
         div.innerHTML = `
             <div style="font-size:24px; font-weight:bold; margin-bottom:15px;">正在同步课程数据...</div>
+            <div id="gm-overlay-target-sem" style="font-size:18px; margin-bottom:10px; color:#ffeb3b;">锁定抓取学期: ${semesterName}</div>
             <div id="gm-overlay-status" style="font-size:16px; margin-bottom:10px; color:#ddd;">正在初始化...</div>
             <div style="font-size:18px;">已抓取: <span id="gm-sync-count" style="color:#4facfe; font-weight:bold;">0</span> 条</div>
             <div style="margin-top:30px; color:#aaa; font-size:14px;">请勿关闭页面，程序正在自动操作</div>
@@ -2904,18 +3021,18 @@ const LessonSearchEnhancer = {
         document.body.appendChild(div);
         return div;
     },
-
+    
     updateOverlay(count) {
         const el = document.getElementById('gm-sync-count');
         if(el) el.innerText = count;
     },
-
+    
     updateOverlayStatus(text) {
         const el = document.getElementById('gm-overlay-status');
         if(el) el.innerText = text;
     }
 };
-
+    
 if (window.location.href.includes('/student/for-std/lesson-search')) {
     if (document.readyState === 'loading') {
         window.addEventListener('DOMContentLoaded', () => LessonSearchEnhancer.init());
@@ -2937,16 +3054,16 @@ function enhanceTeacherNames(row) {
         `;
         document.head.appendChild(style);
     }
-
+    
     const teacherEl = row.querySelector('.course-teacher');
     if (!teacherEl || teacherEl.dataset.gmLinked === "true") return;
-
+    
     const rawText = teacherEl.innerText.trim();
     if (!rawText || rawText === '待定' || rawText === '-') return;
-
+    
     teacherEl.dataset.gmLinked = "true";
     teacherEl.innerHTML = ''; // 清空原文本
-
+    
     // 按空格、逗号、分号拆分多个教师
     const names = rawText.split(/[\s,，;；]+/);
     names.forEach((name, idx) => {
@@ -2963,20 +3080,20 @@ function enhanceTeacherNames(row) {
             window.open('https://teacher.nwpu.edu.cn/search/syss/.html', '_blank');
         };
         teacherEl.appendChild(a);
-
+    
         // 如果有多个教师，补充间隔符
         if (idx < names.length - 1) {
             teacherEl.appendChild(document.createTextNode(' '));
         }
     });
 }
-
+    
 /**
  * 在开课查询页面的表格中注入关注按钮
  */
 function injectFollowButtons() {
     if (!ConfigManager.enableCourseWatch) return;
-
+    
     // --- 1. 初始化弹窗样式 (Toast) ---
     if (!document.getElementById('gm-toast-style')) {
         const style = document.createElement('style');
@@ -2995,7 +3112,7 @@ function injectFollowButtons() {
         `;
         document.head.appendChild(style);
     }
-
+    
     const showToast = (message, type = 'success') => {
         const existing = document.querySelector('.gm-toast');
         if (existing) existing.remove();
@@ -3008,38 +3125,38 @@ function injectFollowButtons() {
         requestAnimationFrame(() => toast.classList.add('show'));
         setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 2000);
     };
-
+    
     // --- 2. 获取学期信息 ---
     let currentSemester = "未知学期";
     try {
         const semesterEl = document.querySelector('.selectize-control.semester .item') ||
-                           document.querySelector('.semester-name') ||
-                           document.querySelector('.selectize-input .item');
+                            document.querySelector('.semester-name') ||
+                            document.querySelector('.selectize-input .item');
         if (semesterEl) {
             currentSemester = semesterEl.innerText.trim();
         }
     } catch(e) { console.warn("无法自动获取学期名称", e); }
-
+    
     // --- 3. 获取表格容器 ---
     const scrollBodyTable = document.querySelector('.dataTables_scrollBody table#table');
     if (!scrollBodyTable) return;
-
+    
     const rows = scrollBodyTable.querySelectorAll('tbody tr');
     rows.forEach(row => {
         if (row.querySelector('.dataTables_empty')) return;
-
+    
         enhanceTeacherNames(row);
-
+    
         const firstTd = row.querySelector('td:first-child');
         const checkbox = row.querySelector('input[name="model_id"]');
         if (!firstTd || !checkbox) return;
         if (firstTd.querySelector('.gm-follow-btn')) return;
-
+    
         // --- 数据提取 ---
         const storageId = checkbox.value;
         const lessonCodeDiv = row.querySelector('.lesson-code');
         const displayCode = lessonCodeDiv ? lessonCodeDiv.innerText.trim() : '未知编号';
-
+    
         const nameEl = row.querySelector('.course-name a');
         const name = nameEl ? nameEl.innerText.trim() : '未知课程';
         const teacherEl = row.querySelector('.course-teacher');
@@ -3048,7 +3165,7 @@ function injectFollowButtons() {
         const credits = creditEl ? creditEl.innerText.trim() : '';
         const placeEl = row.querySelector('.course-datetime-place');
         const timeAndPlace = placeEl ? placeEl.innerText.trim() : '';
-
+    
         // --- 样式布局 ---
         firstTd.style.display = 'flex';
         firstTd.style.flexDirection = 'column';
@@ -3057,13 +3174,13 @@ function injectFollowButtons() {
         firstTd.style.padding = '8px 0';
         firstTd.style.height = '100%';
         checkbox.style.margin = '0';
-
+    
         // --- 创建按钮 ---
         const btn = document.createElement('div');
         btn.className = 'gm-follow-btn';
         btn.innerHTML = '❤';
         btn.style.cssText = `cursor: pointer; font-size: 20px; margin-top: 4px; line-height: 1; user-select: none; transition: all 0.2s; font-family: sans-serif;`;
-
+    
         const updateState = () => {
             if (FollowManager.has(storageId)) {
                 btn.title = '点击取消关注';
@@ -3080,15 +3197,15 @@ function injectFollowButtons() {
             }
         };
         updateState();
-
+    
         btn.onmouseenter = () => { if (!FollowManager.has(storageId)) { btn.style.color = '#fbc4c4'; btn.style.transform = 'scale(1.1)'; } };
         btn.onmouseleave = () => updateState();
-
+    
         btn.onclick = (e) => {
             e.stopPropagation(); e.preventDefault();
             btn.style.transform = 'scale(0.8)';
             setTimeout(() => updateState(), 150);
-
+    
             if (FollowManager.has(storageId)) {
                 FollowManager.remove(storageId);
                 showToast(`已取消关注 ${displayCode}`, 'cancel');
@@ -3106,38 +3223,38 @@ function injectFollowButtons() {
         firstTd.appendChild(btn);
     });
 }
-
+    
 /**
  * 启动开课查询页面的监听器
  */
 function initLessonSearchPage() {
     if (!ConfigManager.enableCourseWatch) return;
     Logger.log("2.6", "已进入全校开课查询页面 (Iframe)");
-
+    
     // 初始执行一次
     injectFollowButtons();
-
+    
     // 使用 MutationObserver 监听表格变化（翻页、搜索时触发）
     const observer = new MutationObserver((mutations) => {
         // 简单的防抖，避免频繁触发
         injectFollowButtons();
     });
-
+    
     const tableContainer = document.getElementById('e-content-area') || document.body;
     observer.observe(tableContainer, {
         childList: true,
         subtree: true
     });
 }
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.7 选课助手 =-=-=-=-=-=-=-=-=-=-=-=-=
 if (window.location.href.includes('/course-selection')) {
     (function() {
         'use strict';
-
+    
         if (unsafeWindow.courseHelperInitialized) return;
         unsafeWindow.courseHelperInitialized = true;
-
+    
         // ==============================================================================
         // [1. 配置与核心变量]
         // ==============================================================================
@@ -3145,22 +3262,22 @@ if (window.location.href.includes('/course-selection')) {
         const TARGET_CELL_SELECTOR = "td div.el-progress";
         const UI_ELEMENT_CLASS = 'course-helper-ui-element';
         const HISTORY_STORAGE_KEY = 'course_enrollment_history_auto_sync';
-
+    
         let courseCodeToLessonIdMap = null;
-
+    
         const originalFetch = unsafeWindow.fetch;
         const originalXhrSend = unsafeWindow.XMLHttpRequest.prototype.send;
         const originalXhrOpen = unsafeWindow.XMLHttpRequest.prototype.open;
-
+    
         // ==============================================================================
         // [2. 网络拦截与数据解析]
         // ==============================================================================
-
+    
         function cleanupAndReset() {
             // 数据重置时，清空映射表
             courseCodeToLessonIdMap = null;
         }
-
+    
         function forceUpdateUI() {
             if (!courseCodeToLessonIdMap) return;
             // console.log('[选课助手] 数据更新，刷新UI...');
@@ -3174,7 +3291,7 @@ if (window.location.href.includes('/course-selection')) {
                 }
             });
         }
-
+    
         function processApiResponse(responseText) {
             cleanupAndReset();
             try {
@@ -3188,13 +3305,13 @@ if (window.location.href.includes('/course-selection')) {
             // 数据准备好后，通知 UI 刷新
             setTimeout(forceUpdateUI, 500);
         }
-
-         // --- 1. 拦截 Fetch  ---
+    
+            // --- 1. 拦截 Fetch  ---
         unsafeWindow.fetch = function(...args) {
             let [resource, config] = args;
             // 兼容 resource 是 Request 对象的情况
             const requestUrl = resource instanceof Request ? resource.url : resource;
-
+    
             // 检查是否是查询请求
             if (requestUrl && requestUrl.includes('/query-lesson/')) {
                 // A. 尝试修改请求参数
@@ -3209,7 +3326,7 @@ if (window.location.href.includes('/course-selection')) {
                         }
                     } catch (e) {}
                 }
-
+    
                 // B. 监听响应
                 return originalFetch.apply(this, args).then(response => {
                     const cloned = response.clone();
@@ -3219,13 +3336,13 @@ if (window.location.href.includes('/course-selection')) {
             }
             return originalFetch.apply(this, args);
         };
-
+    
         // --- 2. 拦截 XHR ---
         unsafeWindow.XMLHttpRequest.prototype.open = function(method, url) {
             this._gm_url = url; // 保存 URL 供 send 使用
             return originalXhrOpen.apply(this, arguments);
         };
-
+    
         // 拦截 Send 修改分页参数
         unsafeWindow.XMLHttpRequest.prototype.send = function(data) {
             this.addEventListener('load', function() {
@@ -3233,7 +3350,7 @@ if (window.location.href.includes('/course-selection')) {
                     processApiResponse(this.responseText);
                 }
             }, { once: true });
-
+    
             if (this._gm_url && this._gm_url.includes('/query-lesson/')) {
                 try {
                     if (typeof data === 'string') {
@@ -3241,10 +3358,10 @@ if (window.location.href.includes('/course-selection')) {
                         // 强制修改 limit / pageSize
                         if (jsonData.hasOwnProperty('limit') || jsonData.hasOwnProperty('pageSize')) {
                             const TARGET_LIMIT = 50;
-
+    
                             if (jsonData.limit) jsonData.limit = TARGET_LIMIT;
                             if (jsonData.pageSize) jsonData.pageSize = TARGET_LIMIT;
-
+    
                             // 重新打包数据
                             data = JSON.stringify(jsonData);
                         }
@@ -3253,14 +3370,14 @@ if (window.location.href.includes('/course-selection')) {
                     // 静默失败
                 }
             }
-
+    
             return originalXhrSend.apply(this, [data]);
         };
-
+    
         // ==============================================================================
         // [3. 辅助功能函数]
         // ==============================================================================
-
+    
         function getSelectionMode() {
             const semesterSpan = document.querySelector('div.course-select-semester > span');
             if (!semesterSpan) return 'unknown';
@@ -3268,9 +3385,9 @@ if (window.location.href.includes('/course-selection')) {
             if (modeText.includes('直选')) return 'direct';
             else return 'wishlist';
         }
-
+    
         function injectDirectSelectionUI(row, lessonId) {
-             fetch(`${API_URL_TEMPLATE}${lessonId}`)
+                fetch(`${API_URL_TEMPLATE}${lessonId}`)
                 .then(response => response.ok ? response.text() : Promise.reject(`HTTP error! status: ${response.status}`))
                 .then(htmlString => {
                     const parser = new DOMParser();
@@ -3302,7 +3419,7 @@ if (window.location.href.includes('/course-selection')) {
                 })
                 .catch(error => { /* 静默 */ });
         }
-
+    
         async function injectWishlistUI(row, lessonId) {
             // 读取存储的历史数据
             const historyJSON = await GM_getValue(HISTORY_STORAGE_KEY, '{}');
@@ -3310,7 +3427,7 @@ if (window.location.href.includes('/course-selection')) {
             try {
                 history = JSON.parse(historyJSON);
             } catch(e) { history = {}; }
-
+    
             const courseHistory = history[lessonId];
             const targetContainer = row.querySelector('td:nth-child(5) > .cell'); // 适配 ElementUI 表格列
             if (targetContainer) {
@@ -3332,75 +3449,75 @@ if (window.location.href.includes('/course-selection')) {
                 }
             }
         }
-
+    
         function injectCollapseControl() {
             const cols = document.querySelectorAll('.el-col.el-col-24');
             let targetContainer = null;
-
+    
             for (const col of cols) {
                 if (col.innerText.includes('【主修】')) {
                     targetContainer = col;
                     break;
                 }
             }
-
+    
             if (!targetContainer) return; // 未找到目标
             if (document.getElementById('gm-collapse-toggle-btn')) return; // 防止重复
-
+    
             const btn = document.createElement('button');
             btn.id = 'gm-collapse-toggle-btn';
-
+    
             // 样式调整：
             btn.className = 'el-button el-button--primary el-button--small';
-
+    
             btn.innerHTML = '<i class="el-icon-s-operation"></i> 全部展开/折叠';
-
+    
             // CSS调整：右浮动 + 阴影 + 字体加粗
             btn.style.cssText = `
-                 float: right;               /* 靠最右侧 */
-                 margin-right: 5px;          /* 右侧留一点缝隙 */
-                 margin-top: 5px;           /* 微调垂直位置，使其垂直居中 */
-                 font-weight: bold;          /* 字体加粗 */
-                 font-size: 14px;            /* 字体加大 */
-                 box-shadow: 0 4px 12px rgba(64, 158, 255, 0.5); /* 添加蓝色光晕阴影，增加显眼度 */
-                 transition: all 0.3s;
+                    float: right;               /* 靠最右侧 */
+                    margin-right: 5px;          /* 右侧留一点缝隙 */
+                    margin-top: 5px;           /* 微调垂直位置，使其垂直居中 */
+                    font-weight: bold;          /* 字体加粗 */
+                    font-size: 14px;            /* 字体加大 */
+                    box-shadow: 0 4px 12px rgba(64, 158, 255, 0.5); /* 添加蓝色光晕阴影，增加显眼度 */
+                    transition: all 0.3s;
             `;
-
+    
             // 4. 绑定点击逻辑
             let isExpanded = true;
             btn.onclick = (e) => {
                 e.stopPropagation();
                 isExpanded = !isExpanded;
-
+    
                 // 添加点击动画效果
                 btn.style.transform = 'scale(0.95)';
                 setTimeout(() => btn.style.transform = 'scale(1)', 150);
-
+    
                 document.querySelectorAll('.course-module').forEach(mod => {
                     const icon = mod.querySelector('i');
                     if (!icon) return;
                     const isOpen = icon.classList.contains('el-icon-caret-bottom');
-
+    
                     if ((isExpanded && !isOpen) || (!isExpanded && isOpen)) {
                         mod.click();
                     }
                 });
-
+    
                 btn.innerHTML = isExpanded ? '<i class="el-icon-folder-opened"></i> 全部折叠' : '<i class="el-icon-folder"></i> 全部展开';
                 btn.blur();
             };
-
+    
             // 5. 插入 DOM
             targetContainer.appendChild(btn);
         }
-
+    
         // ==============================================================================
         // [4. 核心逻辑]
         // ==============================================================================
-
+    
         function processRowWithCode(row, mode) {
             enhanceTeacherNames(row);
-
+    
             let courseCode = null;
             // 1. 尝试获取课程代码
             const accurateCodeElement = row.querySelector('div.lesson-code > a.link-url');
@@ -3410,7 +3527,7 @@ if (window.location.href.includes('/course-selection')) {
                 const fallbackCodeElement = row.querySelector('td:first-child span.el-tooltip');
                 if (fallbackCodeElement) courseCode = fallbackCodeElement.textContent.trim();
             }
-
+    
             // 2. [Diff 检查]：防止重复渲染导致的闪烁
             // 如果当前行已经标记了代码，且代码未变，说明是同一行，仅更新状态颜色，不重绘 DOM
             if (row.dataset.gmCurrentCode === courseCode) {
@@ -3421,7 +3538,7 @@ if (window.location.href.includes('/course-selection')) {
                 }
                 return;
             }
-
+    
             // 3. [清理旧状态]：如果代码变了（说明翻页了，DOM 被复用），清除旧的样式和元素
             if (row.dataset.gmCurrentCode) {
                 row.style.backgroundColor = '';
@@ -3435,14 +3552,14 @@ if (window.location.href.includes('/course-selection')) {
                 row.querySelectorAll('.gm-follow-btn, .course-helper-ui-element').forEach(el => el.remove());
                 delete row.dataset.gmCurrentCode;
             }
-
+    
             // 4. [注入新状态]
             if (courseCode && courseCodeToLessonIdMap && courseCodeToLessonIdMap.has(courseCode)) {
                 // 标记当前行归属
                 row.dataset.gmCurrentCode = courseCode;
                 const lessonId = courseCodeToLessonIdMap.get(courseCode);
                 const nameEl = row.querySelector('.course-name');
-
+    
                 // --- 注入交互式关注按钮 ---
                 if (nameEl) {
                     // 补全样式
@@ -3461,13 +3578,13 @@ if (window.location.href.includes('/course-selection')) {
                         requestAnimationFrame(() => toast.classList.add('show'));
                         setTimeout(() => { toast.classList.remove('show'); setTimeout(() => toast.remove(), 300); }, 2000);
                     };
-
+    
                     const btn = document.createElement('span');
                     btn.className = 'gm-follow-btn';
                     btn.innerHTML = '❤';
                     btn.style.cssText = `cursor: pointer; font-size: 18px; margin-left: 8px; line-height: 1; user-select: none; transition: all 0.2s; display: inline-block; vertical-align: middle;`;
                     btn.title = "点击关注课程";
-
+    
                     // 挂载状态更新函数
                     btn.updateState = () => {
                         if (typeof FollowManager !== 'undefined' && FollowManager.has(lessonId)) {
@@ -3493,12 +3610,12 @@ if (window.location.href.includes('/course-selection')) {
                         }
                     };
                     btn.updateState(); // 初始化调用
-
+    
                     // 绑定点击事件
                     btn.onclick = (e) => {
                         e.stopPropagation();
                         if (typeof FollowManager === 'undefined') { alert('功能未加载'); return; }
-
+    
                         if (FollowManager.has(lessonId)) {
                             FollowManager.remove(lessonId);
                             showToast('已取消关注', 'cancel');
@@ -3509,14 +3626,14 @@ if (window.location.href.includes('/course-selection')) {
                                 // 教师：第3列
                                 const teacherEl = row.querySelector('td:nth-child(3) .course-teacher');
                                 if (teacherEl) teachers = teacherEl.innerText.replace(/[\r\n]+/g, ' ').trim();
-
+    
                                 // 时间地点：第4列
                                 const placeEl = row.querySelector('td:nth-child(4) .dateTimePlace');
                                 if (placeEl) {
                                     const tooltipDiv = placeEl.querySelector('.tooltip-dateTimePlace span');
                                     timeAndPlace = (tooltipDiv ? tooltipDiv.innerText : placeEl.innerText).replace(/[\r\n]+/g, '; ').trim();
                                 }
-
+    
                                 // 学分：第1列下方
                                 const infoEl = row.querySelector('td:nth-child(1) .text-color-6');
                                 if (infoEl) {
@@ -3524,7 +3641,7 @@ if (window.location.href.includes('/course-selection')) {
                                     if (creditMatch) credits = creditMatch[1];
                                 }
                             } catch(err) {}
-
+    
                             // --- 学期提取 (从页面标题) ---
                             let targetSemester = '选课页面关注';
                             try {
@@ -3535,7 +3652,7 @@ if (window.location.href.includes('/course-selection')) {
                                     if (match) targetSemester = match[1];
                                 }
                             } catch (e) {}
-
+    
                             FollowManager.add(lessonId, {
                                 id: lessonId, code: courseCode, name: nameEl.innerText.replace('❤', '').trim(),
                                 teachers, credits, timeAndPlace, semester: targetSemester, addedTime: new Date().toLocaleString()
@@ -3544,41 +3661,41 @@ if (window.location.href.includes('/course-selection')) {
                         }
                         btn.updateState();
                     };
-
+    
                     btn.onmouseenter = () => { if(!FollowManager.has(lessonId)) btn.style.color = '#fbc4c4'; };
                     btn.onmouseleave = () => { if(!FollowManager.has(lessonId)) btn.style.color = '#e4e7ed'; };
-
+    
                     nameEl.appendChild(btn);
                 }
-
+    
                 // --- 注入其他辅助信息 ---
                 if (mode === 'direct') {
                     injectDirectSelectionUI(row, lessonId);
                 } else {
                     injectWishlistUI(row, lessonId);
-
+    
                 }
             }
         }
-
+    
         // ==============================================================================
         // [5. 初始化]
         // ==============================================================================
-
+    
         function main() {
             let debounceTimer = null;
             const mainObserver = new MutationObserver(() => {
                 if (debounceTimer) clearTimeout(debounceTimer);
                 // 50ms 防抖，检测到 DOM 变动停止后执行 UI 更新
                 debounceTimer = setTimeout(() => {
-                     if(courseCodeToLessonIdMap) forceUpdateUI();
+                        if(courseCodeToLessonIdMap) forceUpdateUI();
                     injectCollapseControl();
                 }, 50);
             });
             const container = document.getElementById('app-content') || document.body;
             mainObserver.observe(container, { childList: true, subtree: true });
         }
-
+    
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', main, { once: true });
         } else {
@@ -3586,37 +3703,37 @@ if (window.location.href.includes('/course-selection')) {
         }
     })();
 }
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.8 后台静默数据同步 =-=-=-=-=-=-=-=-=-=-=-=-=
 const BackgroundSyncSystem = {
     WORKER_NAME: 'gm_bg_sync_worker_frame',
-
+    
     // 主控逻辑
     initController() {
         const lastSync = GM_getValue(CONSTANTS.LAST_SYNC_TIME_KEY, 0);
         const now = Date.now();
-
+    
         if (now - lastSync < CONSTANTS.SYNC_COOLDOWN_MS) {
             const remainingMs = CONSTANTS.SYNC_COOLDOWN_MS - (now - lastSync);
             const remainingMins = Math.ceil(remainingMs / 1000 / 60);
             Logger.log("2.8", `处于冷却期，下次自动同步需等待 ${remainingMins} 分钟`);
             return;
         }
-
+    
         Logger.log("2.8", "准备创建后台 Iframe...");
         isBackgroundSyncing = true;
         updateMenuButtonsState(isDataReady);
-
+    
         const oldFrame = document.getElementById('gm_bg_sync_frame');
         if (oldFrame) oldFrame.remove();
-
+    
         const iframe = document.createElement('iframe');
         iframe.id = 'gm_bg_sync_frame';
         iframe.name = this.WORKER_NAME;
         iframe.src = `https://jwxt.nwpu.edu.cn/student/for-std/lesson-search`;
         iframe.style.cssText = `position: fixed; top: 0; left: -15000px; width: 1440px; height: 900px; border: none; visibility: visible; z-index: -100;`;
         document.body.appendChild(iframe);
-
+    
         const messageHandler = (event) => {
             if (event.data && event.data.type === 'GM_BG_SYNC_COMPLETE') {
                 Logger.log("2.8", `后台同步完成。抓取: ${event.data.count}`);
@@ -3632,49 +3749,54 @@ const BackgroundSyncSystem = {
         };
         window.addEventListener('message', messageHandler);
     },
-
+    
     // Worker 逻辑
     startWorker() {
         Logger.info("Sync-Worker", "启动");
-
+    
         let allCourseData = [];
         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
+    
         // 等待Loading遮罩消失
         const waitForLoading = async () => {
             let limit = 0;
             while(!document.querySelector('td.dataTables_empty') && limit < 5) { await sleep(100); limit++; }
             limit = 0;
-            while(document.querySelector('td.dataTables_empty') && limit < 200) { await sleep(100); limit++; }
+            while(document.querySelector('td.dataTables_empty') &&
+                    !document.querySelector('td.dataTables_empty').innerText.includes('无数据') &&
+                    limit < 200) {
+                await sleep(100); limit++;
+            }
             await sleep(500);
         };
-
+    
         // 解析当前页面的表格行
         const scrapeCurrentPage = (currentSemester) => {
             const rows = document.querySelectorAll('#table tbody tr');
             const pageData = [];
-
+    
             rows.forEach(row => {
                 try {
+                    if(row.querySelector('td.dataTables_empty')) return;
                     const idInput = row.querySelector('input[name="model_id"]');
                     if (!idInput) return;
                     const id = idInput.value;
-
+    
                     const codeEl = row.querySelector('.lesson-code');
                     const code = codeEl ? codeEl.innerText.trim() : '';
-
+    
                     const nameEl = row.querySelector('.course-name');
                     const name = nameEl ? nameEl.innerText.trim() : '';
-
+    
                     const teacherEl = row.querySelector('.course-teacher');
                     const teachers = teacherEl ? teacherEl.innerText.trim() : '待定';
-
+    
                     const creditEl = row.children[3];
                     const credits = creditEl ? creditEl.innerText.trim() : '';
-
+    
                     const placeEl = row.querySelector('.course-datetime-place');
                     let timeAndPlace = placeEl ? placeEl.innerText.replace(/\n/g, '; ').trim() : '详见课表';
-
+    
                     const countSpan = row.querySelector('span[data-original-title="实际/上限人数"]');
                     let stdCount = 0;
                     let limitCount = 0;
@@ -3685,20 +3807,20 @@ const BackgroundSyncSystem = {
                             limitCount = parseInt(match[2], 10);
                         }
                     }
-
+    
                     pageData.push({
                         id, code, name, teachers, credits, timeAndPlace, stdCount, limitCount,
                         semester: currentSemester,
                         updateTime: Date.now()
                     });
-
+    
                 } catch (e) {
                     console.error("行解析错误:", e);
                 }
             });
             return pageData;
         };
-
+    
         // 自动化执行流程
         const runAutomation = async () => {
             try {
@@ -3708,30 +3830,50 @@ const BackgroundSyncSystem = {
                     await sleep(500); maxRetries--;
                 }
                 if (maxRetries <= 0) throw new Error("页面加载超时");
-
-                // ================== 1. 切换到最新学期 ==================
+    
+                // ================== 1. 自动寻找最新有数据的学期 ==================
                 let activeSemesterName = "未知学期";
+                let foundValidSemester = false;
+    
                 const semesterInput = document.querySelector('.selectize-control.semester .selectize-input');
                 if (semesterInput) {
+                    // 第一次点击展开，让 DOM 生成列表
                     semesterInput.click();
                     await sleep(500);
-                    const firstOption = document.querySelector('.selectize-dropdown-content .option:first-child');
-                    if (firstOption) {
-                        const targetSemester = firstOption.innerText.trim();
-                        const currentSemester = semesterInput.innerText.trim();
-                        if (targetSemester !== currentSemester && !currentSemester.startsWith(targetSemester)) {
-                            firstOption.click();
-                            await sleep(500);
-                            await waitForLoading();
-                            activeSemesterName = targetSemester;
+    
+                    const options = document.querySelectorAll('.selectize-dropdown-content .option');
+    
+                    for (let i = 0; i < options.length; i++) {
+                        const opt = options[i];
+                        const targetSemester = opt.innerText.trim();
+    
+                        // 每次切换都要点开下拉框
+                        if (i > 0) {
+                            semesterInput.click();
+                            await sleep(300);
+                        }
+    
+                        opt.click();
+                        await waitForLoading();
+    
+                        // 检查当前学期是否无数据
+                        const emptyNode = document.querySelector('td.dataTables_empty');
+                        if (emptyNode && emptyNode.innerText.includes('无数据')) {
+                            Logger.log("Sync-Worker", `检测到 ${targetSemester} 为空，尝试下一个`);
+                            continue; // 没数据，找下一个
                         } else {
-                            activeSemesterName = currentSemester.split('\n')[0];
-                            document.body.click();
+                            activeSemesterName = targetSemester;
+                            foundValidSemester = true;
+                            Logger.log("Sync-Worker", `寻址成功，开始抓取: ${activeSemesterName}`);
+                            break; // 找到有数据的了，跳出循环
                         }
                     }
                 }
-                Logger.log("2.8", `锁定抓取学期: ${activeSemesterName}`);
-
+    
+                if (!foundValidSemester) {
+                    throw new Error("遍历了所有学期均未找到排课数据");
+                }
+    
                 // ================== 2. 切换到 1000 条/页 ==================
                 const pageSizeBtn = document.querySelector('.page-config .dropdown-toggle');
                 if (pageSizeBtn && !pageSizeBtn.innerText.includes('1000')) {
@@ -3742,41 +3884,41 @@ const BackgroundSyncSystem = {
                         await waitForLoading();
                     }
                 }
-
+    
                 // ================== 3. 翻页抓取循环 ==================
                 let pageIndex = 1;
                 while (true) {
                     await waitForLoading();
-
+    
                     const pageData = scrapeCurrentPage(activeSemesterName);
                     allCourseData = allCourseData.concat(pageData);
-
+    
                     const nextIcon = document.querySelector('.semi-auto-table-paginator .fa-angle-right');
                     const nextBtn = nextIcon ? nextIcon.closest('button') : null;
-
+    
                     if (!nextBtn || nextBtn.disabled || nextBtn.classList.contains('disabled')) {
                         break;
                     }
-
+    
                     nextBtn.click();
                     pageIndex++;
                     await sleep(2000);
                 }
-
+    
                 Logger.log("2.8", `全部完成! 存储 ${allCourseData.length} 条。`);
                 GM_setValue(CONSTANTS.BACKGROUND_SYNC_KEY, JSON.stringify(allCourseData));
                 window.top.postMessage({ type: 'GM_BG_SYNC_COMPLETE', count: allCourseData.length }, '*');
-
+    
             } catch (err) {
                 console.error("[Worker] 异常:", err);
                 window.top.postMessage({ type: 'GM_BG_SYNC_COMPLETE', count: 0 }, '*');
             }
         };
-
+    
         setTimeout(runAutomation, 1500);
     }
 };
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.9 培养方案课程代码智能预览 =-=-=-=-=-=-=-=-=-=-=-=-=
 function initProgramPageEnhancement() {
     // 检查功能开关
@@ -3784,15 +3926,15 @@ function initProgramPageEnhancement() {
         return;
     }
     console.log("[NWPU-Enhanced] 初始化培养方案课程预览");
-
+    
     // 1. 数据准备
     const bgDataStr = GM_getValue('jwxt_background_sync_data'); // 使用硬编码Key
     if (!bgDataStr) return;
-
+    
     let courseDB;
     try { courseDB = JSON.parse(bgDataStr); } catch(e) { return; }
     if (!courseDB || courseDB.length === 0) return;
-
+    
     // 构建索引 (Parent Code -> List of Courses)
     const courseMap = new Map();
     courseDB.forEach(c => {
@@ -3802,14 +3944,14 @@ function initProgramPageEnhancement() {
         if (!courseMap.has(parentCode)) courseMap.set(parentCode, []);
         courseMap.get(parentCode).push(c);
     });
-
+    
     // 定义高清 SVG 图标
     const svgs = {
         book: `<svg viewBox="0 0 1024 1024" width="18" height="18" style="vertical-align:-4px;fill:#409EFF"><path d="M832 160H256c-52.9 0-96 43.1-96 96v576c0 52.9 43.1 96 96 96h576c17.7 0 32-14.3 32-32V192c0-17.7-14.3-32-32-32zm-40 640H256c-17.7 0-32-14.3-32-32s14.3-32 32-32h536v64zM256 224h536v320H256V224z"></path></svg>`,
         user: `<svg viewBox="0 0 1024 1024" width="14" height="14" style="fill:#909399;margin-right:6px;"><path d="M512 512c141.4 0 256-114.6 256-256S653.4 0 512 0 256 114.6 256 256s114.6 256 256 256zm0 64c-170.7 0-512 85.3-512 256v64c0 17.7 14.3 32 32 32h960c17.7 0 32-14.3 32-32v-64c0-170.7-341.3-256-512-256z"></path></svg>`,
         pin:  `<svg viewBox="0 0 1024 1024" width="14" height="14" style="fill:#909399;margin-right:6px;"><path d="M512 0C323.8 0 170.7 153.1 170.7 341.3c0 176.3 194.2 460.5 285.4 584.2 24.3 32.9 73.5 32.9 97.8 0 91.2-123.7 285.4-407.9 285.4-584.2C853.3 153.1 700.2 0 512 0zm0 512c-94.3 0-170.7-76.4-170.7-170.7S417.7 170.7 512 170.7 682.7 247.1 682.7 341.3 606.3 512 512 512z"></path></svg>`
     };
-
+    
     // 2. 注入美化后的 CSS
     if (!document.getElementById('gm-program-tooltip-style')) {
         const style = document.createElement('style');
@@ -3830,7 +3972,7 @@ function initProgramPageEnhancement() {
                 background-color: rgba(64, 158, 255, 0.2);
                 color: #0056b3;
             }
-
+    
             /* 弹窗容器 - 磨砂玻璃质感 */
             .gm-program-tooltip {
                 position: fixed; z-index: 100001;
@@ -3846,7 +3988,7 @@ function initProgramPageEnhancement() {
                 transform: translateY(5px);
             }
             .gm-program-tooltip.show { display: block; opacity: 1; transform: translateY(0); }
-
+    
             /* 头部样式 */
             .gm-pt-header {
                 background: linear-gradient(to right, #f9fafc, #ffffff);
@@ -3862,15 +4004,15 @@ function initProgramPageEnhancement() {
                 background:rgba(64, 158, 255, 0.1);
                 padding:4px 10px; border-radius:20px;
             }
-
+    
             /* 列表区域 */
             .gm-pt-list { max-height: 420px; overflow-y: auto; padding: 0; }
-
+    
             /* 滚动条美化 */
             .gm-pt-list::-webkit-scrollbar { width: 6px; }
             .gm-pt-list::-webkit-scrollbar-track { background: transparent; }
             .gm-pt-list::-webkit-scrollbar-thumb { background-color: #dcdfe6; border-radius: 3px; }
-
+    
             /* 单个课程卡片 */
             .gm-pt-item {
                 display: flex;
@@ -3882,7 +4024,7 @@ function initProgramPageEnhancement() {
             }
             .gm-pt-item:last-child { border-bottom: none; }
             .gm-pt-item:hover { background-color: #f0f7ff; }
-
+    
             /* 左侧信息区 */
             .gm-pt-info { flex: 1; min-width: 0; padding-right: 15px; }
             .gm-pt-title {
@@ -3893,12 +4035,12 @@ function initProgramPageEnhancement() {
             .gm-pt-code { font-size: 12px; color: #909399; font-family: Consolas, monospace; margin-bottom: 8px; }
             .gm-pt-meta { display: flex; flex-direction: column; gap: 4px; color: #606266; font-size: 13px; }
             .gm-pt-row { display: flex; align-items: center; }
-
+    
             /* 右侧操作区 */
             .gm-pt-action {
                 display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0;
             }
-
+    
             /* 人数胶囊标签 */
             .gm-pt-stat {
                 font-family: Consolas, monospace; font-size: 13px; font-weight: bold;
@@ -3906,7 +4048,7 @@ function initProgramPageEnhancement() {
             }
             .gm-tag-full { color: #F56C6C; background: #fef0f0; border: 1px solid #fde2e2; }
             .gm-tag-avail { color: #67C23A; background: #f0f9eb; border: 1px solid #e1f3d8; }
-
+    
             /* 关注按钮 */
             .gm-pt-btn {
                 cursor: pointer; font-size: 22px; color: #dcdfe6; line-height: 1;
@@ -3919,17 +4061,17 @@ function initProgramPageEnhancement() {
         `;
         document.head.appendChild(style);
     }
-
+    
     let tooltip = document.querySelector('.gm-program-tooltip');
     if(!tooltip) {
         tooltip = document.createElement('div');
         tooltip.className = 'gm-program-tooltip';
         document.body.appendChild(tooltip);
     }
-
+    
     // 3. 全局事件委托 (处理悬停和点击)
     let hideTimer = null;
-
+    
     document.body.addEventListener('mouseover', function(e) {
         if (e.target.classList.contains('gm-course-code-highlight')) {
             if (hideTimer) clearTimeout(hideTimer);
@@ -3940,13 +4082,13 @@ function initProgramPageEnhancement() {
             if (hideTimer) clearTimeout(hideTimer);
         }
     });
-
+    
     document.body.addEventListener('mouseout', function(e) {
         if (e.target.classList.contains('gm-course-code-highlight') || e.target.closest('.gm-program-tooltip')) {
             hideTimer = setTimeout(() => { tooltip.classList.remove('show'); }, 300);
         }
     });
-
+    
     document.body.addEventListener('dblclick', function(e) {
         // 检查是否点击了高亮的代码块
         if (e.target.classList.contains('gm-course-code-highlight')) {
@@ -3957,12 +4099,12 @@ function initProgramPageEnhancement() {
                 const originalTransition = e.target.style.transition;
                 const originalBg = e.target.style.backgroundColor;
                 const originalColor = e.target.style.color;
-
+    
                 e.target.style.transition = 'all 0.1s';
                 e.target.style.backgroundColor = '#f0f9eb';
                 e.target.style.color = '#67C23A';
                 e.target.textContent = '已复制!'; // 临时改变文字提示
-
+    
                 setTimeout(() => {
                     e.target.textContent = code; // 恢复文字
                     e.target.style.backgroundColor = originalBg;
@@ -3973,13 +4115,13 @@ function initProgramPageEnhancement() {
                 console.error('复制失败:', err);
                 alert('复制失败，请手动复制');
             });
-
+    
             // 阻止选中文本的默认行为
             e.preventDefault();
             window.getSelection().removeAllRanges();
         }
     });
-
+    
     // 处理关注按钮点击
     document.body.addEventListener('click', function(e) {
         const btn = e.target.closest('.gm-pt-btn');
@@ -3988,13 +4130,13 @@ function initProgramPageEnhancement() {
             handleFollowClick(btn);
         }
     });
-
+    
     function handleFollowClick(btn) {
         const id = btn.dataset.id.toString();
         const semester = btn.dataset.semester && btn.dataset.semester !== "undefined"
-                         ? btn.dataset.semester
-                         : '从培养方案页关注';
-
+                            ? btn.dataset.semester
+                            : '从培养方案页关注';
+    
         const data = {
             id: id,
             code: btn.dataset.code,
@@ -4005,7 +4147,7 @@ function initProgramPageEnhancement() {
             timeAndPlace: btn.dataset.place,
             addedTime: new Date().toLocaleString()
         };
-
+    
         if (FollowManager.has(id)) {
             FollowManager.remove(id);
             btn.classList.remove('is-active');
@@ -4016,7 +4158,7 @@ function initProgramPageEnhancement() {
             btn.style.color = '#f56c6c';
         }
     }
-
+    
     // 4. DOM 扫描 (将普通文本转换为高亮节点)
     function processCells() {
         const cells = document.querySelectorAll('td');
@@ -4034,12 +4176,12 @@ function initProgramPageEnhancement() {
             }
         });
     }
-
+    
     // 5. 显示浮层 (生成HTML)
     function showTooltip(targetEl, code) {
         const courses = courseMap.get(code) || [];
         const rect = targetEl.getBoundingClientRect();
-
+    
         let contentHTML = '';
         if (courses.length === 0) {
             contentHTML = '<div style="padding:30px;text-align:center;color:#909399;font-size:13px;">本学期暂无开课记录</div>';
@@ -4051,10 +4193,10 @@ function initProgramPageEnhancement() {
                 const isFollowed = FollowManager.has(c.id);
                 const activeClass = isFollowed ? 'is-active' : '';
                 const initColor = isFollowed ? '#f56c6c' : '#dcdfe6';
-
+    
                 const teacherText = c.teachers || '待定';
                 const placeText = c.timeAndPlace || '详见课表';
-
+    
                 contentHTML += `
                     <div class="gm-pt-item">
                         <div class="gm-pt-info">
@@ -4070,18 +4212,18 @@ function initProgramPageEnhancement() {
                                 ${c.stdCount}/${c.limitCount}
                             </div>
                             <div class="gm-pt-btn ${activeClass}" style="color:${initColor}"
-                                 data-id="${c.id}" data-code="${c.code}" data-name="${c.name}"
-                                 data-teachers="${teacherText}" data-place="${placeText}"
-                                 data-credits="${c.credits || ''}"
-                                 data-semester="${c.semester}"
-                                 title="${isFollowed ? '取消关注' : '关注此班级'}">❤</div>
+                                    data-id="${c.id}" data-code="${c.code}" data-name="${c.name}"
+                                    data-teachers="${teacherText}" data-place="${placeText}"
+                                    data-credits="${c.credits || ''}"
+                                    data-semester="${c.semester}"
+                                    title="${isFollowed ? '取消关注' : '关注此班级'}">❤</div>
                         </div>
                     </div>
                 `;
             });
             contentHTML += `</div>`;
         }
-
+    
         tooltip.innerHTML = `
             <div class="gm-pt-header">
                 <span style="display:flex;align-items:center;gap:8px">${svgs.book} <span style="font-family:Consolas, monospace;font-size:16px;">${code}</span></span>
@@ -4089,29 +4231,29 @@ function initProgramPageEnhancement() {
             </div>
             ${contentHTML}
         `;
-
+    
         // 智能定位
         const viewportHeight = window.innerHeight;
         const tooltipHeight = Math.min(500, courses.length * 90 + 125); // 估算高度
         let top = rect.bottom + 8;
-
+    
         // 如果底部放不下，就放上面
         if (rect.bottom + tooltipHeight > viewportHeight) {
             top = rect.top - tooltipHeight - 10;
             if(top < 10) top = 10; // 防止溢出顶部
         }
-
+    
         // 水平定位
         let left = rect.left + 80;
         if (left + 440 > window.innerWidth) {
             left = window.innerWidth - 450;
         }
-
+    
         tooltip.style.left = left + 'px';
         tooltip.style.top = top + 'px';
         tooltip.classList.add('show');
     }
-
+    
     // 观察页面变化，动态处理新加载的内容
     const observer = new MutationObserver(() => {
         if(window.gm_program_timer) clearTimeout(window.gm_program_timer);
@@ -4119,12 +4261,12 @@ function initProgramPageEnhancement() {
     });
     const targetNode = document.querySelector('.main-content') || document.body;
     observer.observe(targetNode, { childList: true, subtree: true });
-
+    
     // 初始执行
     setTimeout(processCells, 500);
     setTimeout(processCells, 1500);
 }
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.10 选课时间提醒 =-=-=-=-=-=-=-=-=-=-=-=-=
 function initScheduleWidget() {
     // ================= 配置区域 (维护请修改此处) =================
@@ -4137,7 +4279,7 @@ function initScheduleWidget() {
         COURSE_URL: 'https://jwxt.nwpu.edu.cn/student/for-std/course-select',
         // 提前N小时提示同步数据
         PRE_NOTIFY_HOURS: 16,
-
+    
         // 选课阶段配置 (支持自动生成表格)
         // type: 'positive' (正选) | 'makeup' (补选/其他) -> 用于判断是否触发考前数据同步提示
         GROUPS: [
@@ -4159,32 +4301,32 @@ function initScheduleWidget() {
         ]
     };
     // ===========================================================
-
+    
     const showWidget = () => {
         if (GM_getValue(SCHEDULE_CONFIG.STORAGE_KEY, false) === true) return;
         // 避免单次页面刷新内重复关闭后弹出
         if (window.gm_schedule_manually_closed) return;
-
+    
         const now = Date.now();
         const expirationTime = new Date(SCHEDULE_CONFIG.EXPIRATION_DATE).getTime();
-
+    
         if (now > expirationTime) return;
         if (document.querySelector('.gm-schedule-box')) return;
-
+    
         // --- 1. 计算当前状态 & 构建表格行 ---
         let statusHtml = '<span style="color: #909399;">当前未处于选课时段</span>';
         let showPreSyncLink = false; // 是否显示同步链接
         let tableRowsHtml = '';
-
+    
         // 扁平化遍历所有阶段以检查时间
         let activePhaseFound = false;
-
+    
         SCHEDULE_CONFIG.GROUPS.forEach((group, gIndex) => {
             group.phases.forEach((phase, pIndex) => {
                 const startTime = new Date(phase.start).getTime();
                 const endTime = new Date(phase.end).getTime();
                 const preStartTime = startTime - (SCHEDULE_CONFIG.PRE_NOTIFY_HOURS * 60 * 60 * 1000);
-
+    
                 // A. 检查状态: 进行中
                 if (!activePhaseFound && now >= startTime && now <= endTime) {
                     statusHtml = `当前处于 <span style="color: #f56c6c; font-weight: bold; border-bottom: 2px solid #f56c6c;">${group.groupName} - ${phase.name}</span>`;
@@ -4194,11 +4336,11 @@ function initScheduleWidget() {
                 else if (!activePhaseFound && phase.type === 'positive' && now >= preStartTime && now < startTime) {
                     const hoursLeft = Math.ceil((startTime - now) / 3600000);
                     statusHtml = `<span style="color: #E65100; font-weight:bold;">${group.groupName}${phase.name}</span> 将于 ${hoursLeft} 小时后开始。` +
-                                 `<span id="gm-sch-pre-sync" style="color:#409EFF; cursor:pointer; text-decoration:underline; font-weight:bold; margin-left:10px;">[建议您点击此处记录课程内置情况]</span>`;
+                                    `<span id="gm-sch-pre-sync" style="color:#409EFF; cursor:pointer; text-decoration:underline; font-weight:bold; margin-left:10px;">[建议您点击此处记录课程内置情况]</span>`;
                     showPreSyncLink = true;
                     activePhaseFound = true;
                 }
-
+    
                 // C. 构建表格行
                 // 格式化时间显示 (移除年份，保留 月-日 时:分)
                 const formatTime = (isoStr) => {
@@ -4206,17 +4348,17 @@ function initScheduleWidget() {
                     return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours()}点`;
                 };
                 const timeStr = `${formatTime(phase.start)} 至 ${formatTime(phase.end)}`;
-
+    
                 tableRowsHtml += `<tr>`;
                 // 处理第一列的 Rowspan (合并单元格)
                 if (pIndex === 0) {
                     const borderStyle = gIndex > 0 ? 'border-top:2px solid #ebeef5;' : '';
                     tableRowsHtml += `<td rowspan="${group.phases.length}" style="font-weight:bold; ${borderStyle}">${group.groupName}</td>`;
                 }
-
+    
                 // 高亮选课方式
                 const methodClass = phase.method.includes('意愿值') || phase.method.includes('直选') ? 'gm-sch-highlight' : '';
-
+    
                 tableRowsHtml += `
                     <td>${phase.name}</td>
                     <td>${timeStr}</td>
@@ -4225,7 +4367,7 @@ function initScheduleWidget() {
                 </tr>`;
             });
         });
-
+    
         // --- 2. 注入样式 ---
         if (!document.getElementById('gm-schedule-table-style')) {
             const style = document.createElement('style');
@@ -4271,7 +4413,7 @@ function initScheduleWidget() {
             `;
             document.head.appendChild(style);
         }
-
+    
         // --- 3. 构建容器 HTML ---
         const div = document.createElement('div');
         div.className = 'gm-schedule-box';
@@ -4300,7 +4442,7 @@ function initScheduleWidget() {
             </div>
         `;
         document.body.appendChild(div);
-
+    
         // --- 4. 事件绑定 ---
         // 绑定同步数据的点击事件
         if (showPreSyncLink) {
@@ -4316,12 +4458,12 @@ function initScheduleWidget() {
                 };
             }
         }
-
+    
         // 跳转选课页面
         document.getElementById('gm-schedule-go-btn').onclick = () => {
             window.location.href = SCHEDULE_CONFIG.COURSE_URL;
         };
-
+    
         // 关闭
         document.getElementById('gm-schedule-close-btn').onclick = () => {
             if (document.getElementById('gm-schedule-check').checked) {
@@ -4331,12 +4473,12 @@ function initScheduleWidget() {
             div.remove();
         };
     };
-
+    
     const hideWidget = () => {
         const box = document.querySelector('.gm-schedule-box');
         if (box) box.remove();
     };
-
+    
     // 监控页面变化
     setInterval(() => {
         const iframes = document.querySelectorAll('iframe');
@@ -4356,18 +4498,18 @@ function initScheduleWidget() {
             hideWidget();
         }
     }, 1000); // 稍微放宽检查间隔
-
+    
     // 首次立即检查
     if (window.location.href.includes('/student/home')) showWidget();
 }
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.11 自动评教模块 =-=-=-=-=-=-=-=-=-=-=-=-=
 function initEvaluationHelper() {
     const IS_TEST_MODE = false; // 正式使用请设为 false
-
+    
     if (window.gm_eval_observer_started) return;
     window.gm_eval_observer_started = true;
-
+    
     // --- 基础工具 ---
     const waitForElement = (selector, timeout = 5000) => {
         return new Promise((resolve) => {
@@ -4383,7 +4525,7 @@ function initEvaluationHelper() {
         });
     };
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
+    
     // 模拟输入事件，确保Vue响应
     const triggerInputEvent = (element, value) => {
         if (!element) return;
@@ -4393,7 +4535,7 @@ function initEvaluationHelper() {
         element.dispatchEvent(new Event('change', { bubbles: true }));
         element.blur();
     };
-
+    
     // --- 1. 注入 CSS ---
     if (!document.getElementById('gm-eval-style')) {
         const style = document.createElement('style');
@@ -4440,25 +4582,25 @@ function initEvaluationHelper() {
         `;
         document.head.appendChild(style);
     }
-
+    
     // --- 2. 抓取任务 ---
     function scrapeTasks() {
         const tasks = [];
         let idCounter = 0;
         const rows = document.querySelectorAll('.el-table__body-wrapper tbody tr');
-
+    
         rows.forEach(row => {
             const courseNameEl = row.querySelector('.coursename .name') || row.querySelector('td:nth-child(2)');
             const courseName = courseNameEl ? courseNameEl.innerText.replace(/\s+/g, ' ').trim() : '未知课程';
             const successTag = row.querySelector('.el-tag--success');
             const isRowComplete = successTag && successTag.innerText.includes('已完成');
-
+    
             const links = row.querySelectorAll('a');
-
+    
             links.forEach(link => {
                 const isSubmitted = link.innerText.includes('已评') || link.classList.contains('submitted');
                 const isDisabled = link.classList.contains('is-disabled');
-
+    
                 if (link.innerText.length > 1 && !isDisabled) {
                     tasks.push({
                         id: ++idCounter,
@@ -4474,7 +4616,7 @@ function initEvaluationHelper() {
         });
         return tasks;
     }
-
+    
     // --- 3. 显示主面板 ---
     const showEvalModal = () => {
         if (document.getElementById('gm-eval-modal')) return;
@@ -4484,12 +4626,12 @@ function initEvaluationHelper() {
             if (!courseGroups[task.course]) courseGroups[task.course] = [];
             courseGroups[task.course].push(task);
         });
-
+    
         const overlay = document.createElement('div');
         overlay.id = 'gm-eval-modal';
         overlay.className = 'gm-modal-overlay';
         const pendingCount = taskList.filter(t => !t.isDone).length;
-
+    
         overlay.innerHTML = `
             <div class="gm-modal-content">
                 <div class="gm-modal-header">
@@ -4519,7 +4661,7 @@ function initEvaluationHelper() {
             </div>
         `;
         document.body.appendChild(overlay);
-
+    
         const container = document.getElementById('gm-eval-container');
         if (Object.keys(courseGroups).length === 0) {
             container.innerHTML = '<div style="text-align:center;padding:50px;color:#999;">当前没有评教任务</div>';
@@ -4561,13 +4703,13 @@ function initEvaluationHelper() {
                 container.appendChild(groupDiv);
             }
         }
-
+    
         const btnMin = document.getElementById('gm-btn-min-eval');
         const btnRun = document.getElementById('gm-btn-run-selected');
         const checkAll = document.getElementById('gm-check-all-available');
-
+    
         document.getElementById('gm-eval-close').onclick = () => overlay.remove();
-
+    
         checkAll.onchange = (e) => {
             document.querySelectorAll('.gm-item-check:not(:disabled)').forEach(cb => cb.checked = e.target.checked);
         };
@@ -4578,26 +4720,26 @@ function initEvaluationHelper() {
                 if (cb) cb.checked = true;
             };
         });
-
+    
         const fillFormExact = (targetScore) => {
             const groups = document.querySelectorAll('.el-radio-group');
             const questions = [];
             let maxTotalScore = 0;
-
+    
             // 1. 扫描题目结构
             groups.forEach((group, index) => {
                 const options = group.querySelectorAll('.el-radio');
                 if (options.length === 0) return;
-
+    
                 const text = options[0].innerText || "";
                 let maxPoints = 5;
                 let step = 1;
-
+    
                 if (text.includes("10分")) {
                     maxPoints = 10;
                     step = 2;
                 }
-
+    
                 maxTotalScore += maxPoints;
                 questions.push({
                     domOptions: options,
@@ -4606,12 +4748,12 @@ function initEvaluationHelper() {
                     currentIdx: 0
                 });
             });
-
+    
             if (targetScore > maxTotalScore) targetScore = maxTotalScore;
             if (targetScore < 0) targetScore = 0;
-
+    
             let pointsToLose = maxTotalScore - targetScore;
-
+    
             // 2. 算法扣分
             // Phase A: 扣除奇数分 (找5分题)
             if (pointsToLose % 2 !== 0) {
@@ -4621,13 +4763,13 @@ function initEvaluationHelper() {
                     pointsToLose -= 1;
                 }
             }
-
+    
             // Phase B: 扣除偶数分 (优先10分题)
             for (let q of questions) {
                 if (pointsToLose <= 0) break;
                 const remainingSteps = (q.domOptions.length - 1) - q.currentIdx;
                 const maxDeductable = remainingSteps * q.step;
-
+    
                 if (maxDeductable > 0) {
                     let deduct = Math.min(pointsToLose, maxDeductable);
                     const stepsToMove = deduct / q.step;
@@ -4635,7 +4777,7 @@ function initEvaluationHelper() {
                     pointsToLose -= deduct;
                 }
             }
-
+    
             // 3.深度点击执行
             questions.forEach(q => {
                 const targetOption = q.domOptions[q.currentIdx] || q.domOptions[q.domOptions.length - 1];
@@ -4653,7 +4795,7 @@ function initEvaluationHelper() {
                     }
                 }
             });
-
+    
             // 4. 填星星
             document.querySelectorAll('.el-rate').forEach(group => {
                 const stars = group.querySelectorAll('.el-rate__item');
@@ -4661,7 +4803,7 @@ function initEvaluationHelper() {
                 if (targetScore < 90) starIdx = Math.max(0, stars.length - 2);
                 if (stars[starIdx]) stars[starIdx].click();
             });
-
+    
             // 5. 填评语
             const comments = ["老师授课认真，重点突出。", "教学严谨，对学生负责。", "课堂氛围好，讲解生动。", "深入浅出，受益匪浅。", "理论联系实际，收获很大。"];
             document.querySelectorAll('textarea').forEach(area => {
@@ -4669,32 +4811,32 @@ function initEvaluationHelper() {
                 triggerInputEvent(area, randomComment);
             });
         };
-
+    
         // --- 核心执行函数 ---
         const executeTasks = async (tasksToRun) => {
             if (tasksToRun.length === 0) {
                 alert("没有选中任何任务！");
                 return;
             }
-
+    
             btnMin.disabled = true;
             btnRun.disabled = true;
             document.querySelectorAll('input').forEach(i => i.disabled = true);
             let downgradedCourses = [];
-
+    
             for (let i = 0; i < tasksToRun.length; i++) {
                 const task = tasksToRun[i];
                 if (task.isDone) continue;
-
+    
                 const statusEl = document.getElementById(`status-${task.id}`);
                 const inputVal = document.getElementById(`score-${task.id}`).value;
                 let scoreVal = inputVal ? parseInt(inputVal) : 95;
-
+    
                 statusEl.className = 'gm-status-running';
                 statusEl.innerText = '准备进入...';
                 const rowEl = statusEl.closest('.gm-teacher-row');
                 if(rowEl) rowEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
+    
                 try {
                     // ★ 重新寻找DOM (Fix Stale Element)
                     let activeLink = null;
@@ -4713,9 +4855,9 @@ function initEvaluationHelper() {
                         if (activeLink) break;
                     }
                     if (!activeLink) activeLink = task.element;
-
+    
                     activeLink.click();
-
+    
                     statusEl.innerText = '加载表单...';
                     const formReady = await waitForElement('.el-radio-group', 15000);
                     if (!formReady) {
@@ -4725,12 +4867,12 @@ function initEvaluationHelper() {
                         if (!retryReady) throw new Error("表单加载超时");
                     }
                     await sleep(1000);
-
+    
                     // 1. 填表
                     statusEl.innerText = '正在填表...';
                     fillFormExact(scoreVal);
                     await sleep(1500);
-
+    
                     // 2. 提交
                     let submitBtn = null;
                     const btnGroup = document.getElementById('btn-group');
@@ -4743,40 +4885,40 @@ function initEvaluationHelper() {
                             }
                         }
                     }
-
+    
                     if (submitBtn) {
                         // 如果按钮还禁用，重试填表
                         if (submitBtn.disabled || submitBtn.classList.contains('is-disabled')) {
-                             fillFormExact(scoreVal);
-                             await sleep(1000);
+                                fillFormExact(scoreVal);
+                                await sleep(1000);
                         }
-
+    
                         statusEl.innerText = '提交中...';
                         submitBtn.click();
-
+    
                         const msgBox = await waitForElement('.el-message-box', 5000);
-
+    
                         // 检查是否有错误提示 (500 Error 会弹 toast 或 message-box)
                         const errorToast = document.querySelector('.el-message--error');
                         if (errorToast) {
                             throw new Error("服务器返回错误(500)，可能是提交过快");
                         }
-
+    
                         if (msgBox) {
                             const text = msgBox.innerText || "";
                             const confirmBtn = msgBox.querySelector('.el-button--primary');
-
+    
                             // 场景 A：20% 限制
                             if (text.includes('20%') || text.includes('不得超过') || text.includes('优秀')) {
                                 statusEl.innerText = '限制触发, 降分...';
                                 if (confirmBtn) confirmBtn.click();
                                 await sleep(1000);
-
+    
                                 scoreVal = 89;
                                 downgradedCourses.push(`${task.course}`);
                                 fillFormExact(89);
                                 await sleep(1500);
-
+    
                                 if (!submitBtn.disabled) {
                                     submitBtn.click();
                                     const confirmBox2 = await waitForElement('.el-message-box__btns', 5000);
@@ -4791,18 +4933,18 @@ function initEvaluationHelper() {
                                 if (confirmBtn) confirmBtn.click();
                             }
                         }
-
+    
                         // 等待返回列表
                         statusEl.innerText = '等待返回...';
                         await waitForElement('.el-table__body-wrapper', 15000);
                         await sleep(1500);
-
+    
                         statusEl.className = 'gm-status-success';
                         statusEl.innerText = `完成(${scoreVal})`;
                     } else {
                         throw new Error("未找到提交按钮");
                     }
-
+    
                 } catch (e) {
                     console.error(e);
                     statusEl.className = 'gm-status-error';
@@ -4815,31 +4957,31 @@ function initEvaluationHelper() {
                     await sleep(2000);
                 }
             }
-
+    
             btnMin.innerText = "流程结束";
             btnRun.innerText = "流程结束";
-
+    
             let finishMsg = "所有任务处理完成！";
             if (downgradedCourses.length > 0) {
                 finishMsg += `\n\n⚠️ 检测到优秀率限制，以下课程已自动降为 89 分：\n` + downgradedCourses.join('\n');
             }
             finishMsg += "\n\n建议刷新页面更新状态。是否刷新？";
-
+    
             if (confirm(finishMsg)) {
                 window.location.reload();
             }
         };
-
+    
         // --- 功能 A: 自动完成最低评教 ---
         btnMin.onclick = () => {
             document.querySelectorAll('.gm-item-check').forEach(c => c.checked = false);
             document.querySelectorAll('.gm-score-input').forEach(i => {
                 if(!i.disabled) i.value = '';
             });
-
+    
             const itemsToRun = [];
             let skippedCourses = 0;
-
+    
             for (const [courseName, teachers] of Object.entries(courseGroups)) {
                 const alreadyDone = teachers.some(t => t.isDone) || (teachers.length > 0 && teachers[0].courseIsDone);
                 if (alreadyDone) {
@@ -4849,10 +4991,10 @@ function initEvaluationHelper() {
                 if (teachers.length > 0) {
                     const target = teachers[0];
                     if (target.isDone) continue;
-
+    
                     const checkbox = document.querySelector(`.gm-item-check[data-id="${target.id}"]`);
                     const scoreInput = document.getElementById(`score-${target.id}`);
-
+    
                     if (checkbox && scoreInput && !checkbox.disabled) {
                         checkbox.checked = true;
                         // 随机 80 - 89 分
@@ -4861,63 +5003,63 @@ function initEvaluationHelper() {
                     }
                 }
             }
-
+    
             if (itemsToRun.length === 0) {
                 alert(`没有待处理的最低评教任务。\n\n已跳过 ${skippedCourses} 门已完成(或部分完成)的课程。`);
                 return;
             }
-
+    
             if (confirm(`即将对 ${itemsToRun.length} 门课程进行最低标准评教（每门课评1人，随机80-89分）。\n\n是否开始？`)) {
                 executeTasks(itemsToRun);
             }
         };
-
+    
         // --- 功能 B: 开始评教---
         btnRun.onclick = () => {
             const selectedIds = Array.from(document.querySelectorAll('.gm-item-check:checked'))
                 .filter(cb => !cb.disabled)
                 .map(cb => parseInt(cb.dataset.id));
-
+    
             const itemsToRun = taskList.filter(t => selectedIds.includes(t.id));
-
+    
             if (itemsToRun.length === 0) {
                 alert("请至少勾选一个待评任务！");
                 return;
             }
-
+    
             let hasEmptyScore = false;
             itemsToRun.forEach(t => {
                 const val = document.getElementById(`score-${t.id}`).value;
                 if (!val) hasEmptyScore = true;
             });
-
+    
             let msg = `即将对 ${itemsToRun.length} 位教师进行评教。`;
             if (hasEmptyScore) msg += `\n\n⚠️ 注意：部分未填分，默认按 95分 (优秀) 处理。`;
             msg += `\n\n是否开始？`;
-
+    
             if (confirm(msg)) {
                 executeTasks(itemsToRun);
             }
         };
     };
-
+    
     // --- 4. 入口按钮 ---
     const injectPageButton = () => {
         const targetContainer = document.querySelector('.el-tab-pane .el-select') || document.querySelector('.el-form');
         if (!targetContainer || document.getElementById('gm-page-eval-btn')) return;
-
+    
         const btn = document.createElement('button');
         btn.id = 'gm-page-eval-btn';
         btn.className = 'el-button el-button--primary el-button--small';
         btn.innerHTML = `<i class="el-icon-s-cooperation"></i> 打开自动评教`;
         btn.style.cssText = 'margin-left: 15px; vertical-align: top; height: 32px; font-weight: bold; box-shadow: 0 2px 6px rgba(64,158,255, 0.3);';
-
+    
         if (targetContainer.parentNode) targetContainer.parentNode.insertBefore(btn, targetContainer.nextSibling);
         else targetContainer.appendChild(btn);
-
+    
         btn.onclick = showEvalModal;
     };
-
+    
     const startObserve = () => {
         const observer = new MutationObserver(() => {
             if (location.href.includes('evaluation-student-frontend')) injectPageButton();
@@ -4925,18 +5067,18 @@ function initEvaluationHelper() {
         observer.observe(document.body, { childList: true, subtree: true });
         injectPageButton();
     };
-
+    
     if (document.body) startObserve();
     else window.addEventListener('load', startObserve);
 }
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.12 人员信息检索 =-=-=-=-=-=-=-=-=-=-=-=-=
 const PersonnelSearch = {
-
+    
     STORAGE_KEY: "nwpu_synced_token",
     API_BASE: "https://electronic-signature.nwpu.edu.cn/api/local-user/page",
     state: { page: 1, loading: false, hasMore: true, keyword: "", items: [] },
-
+    
     // 名片动态渐变色系库
     THEME_COLORS: [
         { bg: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)', text: '#0084ff' }, // 经典蓝
@@ -4945,7 +5087,7 @@ const PersonnelSearch = {
         { bg: 'linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)', text: '#8c6ad1' }, // 梦幻紫
         { bg: 'linear-gradient(135deg, #f6d365 0%, #fda085 100%)', text: '#e8753a' }  // 活力橙
     ],
-
+    
     // 中国大陆及港澳台省级行政区划代码字典 (前2位)
     PROVINCE_MAP: {
         11: "北京", 12: "天津", 13: "河北", 14: "山西", 15: "内蒙古",
@@ -4956,19 +5098,19 @@ const PersonnelSearch = {
         54: "西藏", 61: "陕西", 62: "甘肃", 63: "青海", 64: "宁夏",
         65: "新疆", 71: "台湾", 81: "香港", 82: "澳门", 83: "台湾"
     },
-
+    
     _inferIdentity(id) {
         if (!id) return { short: '', long: '' };
-
+    
         // 规则1：检查是否为 10 位字符（前4位数字年份，5-6位类型码允许字母，后4位数字编号）
         if (id.length === 10 && /^\d{4}[A-Z0-9]{2}\d{4}$/i.test(id)) {
             const year = id.substring(0, 4);
             const typeCode = id.substring(4, 6).toUpperCase();
-
+    
             let shortLabel = '';
             let longLabel = '';
             let yearSuffix = '级';
-
+    
             switch (typeCode) {
                 case '10': shortLabel = '博士生'; longLabel = '学术型 博士研究生'; break;
                 case '11': shortLabel = '博士生'; longLabel = '专项计划 博士研究生'; break;
@@ -5044,20 +5186,20 @@ const PersonnelSearch = {
                 default:
                     return { short: '', long: '' };
             }
-
+    
             return {
                 short: shortLabel,
                 long: `${year}${yearSuffix} ${longLabel}`
             };
         }
-
+    
         // 规则2：检查是否为 8 位纯数字（退休）
         if (id.length === 8 && /^\d{8}$/.test(id)) {
             return {
                 short: '离/退休',
             };
         }
-
+    
         // 规则3：检查是否为 6 位纯数字（早期学号）
         if (id.length === 6 && /^\d{6}$/.test(id)) {
             const shortYear = '20' + id.substring(0, 2);
@@ -5066,13 +5208,13 @@ const PersonnelSearch = {
                 long: `${shortYear}级 本科生`
             };
         }
-
+    
         return { short: '', long: '' };
     },
-
+    
     _parseIDCard(sfzjh) {
         if (!sfzjh) return null;
-
+    
         // 1. 大陆身份证 及 港澳台居民居住证（18位脱敏，第17位包含性别）
         // (居住证前两位：81香港，82澳门，83台湾)
         if (sfzjh.length === 18 && /^[1-9]\d\*{14}\d[\dXx]$/i.test(sfzjh)) {
@@ -5084,7 +5226,7 @@ const PersonnelSearch = {
                 gender: (genderNum % 2 === 1) ? '男' : '女'
             };
         }
-
+    
         // 2. 港澳居民来往内地通行证 (回乡证，9位字符脱敏)
         if (sfzjh.length === 9 && /^[HMhm]\d\*{5}\d{2}$/.test(sfzjh)) {
             const firstLetter = sfzjh.charAt(0).toUpperCase();
@@ -5094,7 +5236,7 @@ const PersonnelSearch = {
                 gender: '未知' // 通行证号码不包含性别信息
             };
         }
-
+    
         // 3. 台湾居民来往大陆通行证 (台胞证，8位数字脱敏)
         if (sfzjh.length === 8 && /^\d{2}\*{4}\d{2}$/.test(sfzjh)) {
             return {
@@ -5105,7 +5247,7 @@ const PersonnelSearch = {
         }
         return null;
     },
-
+    
     syncToken() {
         if (location.host !== 'ecampus.nwpu.edu.cn') return;
         const checkAndSave = () => {
@@ -5116,7 +5258,7 @@ const PersonnelSearch = {
         setTimeout(checkAndSave, 500);
         setTimeout(checkAndSave, 2000);
     },
-
+    
     openModal() {
         Logger.log('2.12', "初始化人员信息检索");
         const token = GM_getValue(this.STORAGE_KEY);
@@ -5129,7 +5271,7 @@ const PersonnelSearch = {
         }
         this._startSilentSync();
     },
-
+    
     _startSilentSync() {
         this._showToast("正在后台获取授权，请稍候...");
         const iframe = document.createElement('iframe');
@@ -5137,7 +5279,7 @@ const PersonnelSearch = {
         iframe.style.display = 'none';
         iframe.id = 'gm-sync-iframe-worker';
         document.body.appendChild(iframe);
-
+    
         let attempts = 0;
         const maxAttempts = 15;
         const timer = setInterval(() => {
@@ -5160,12 +5302,12 @@ const PersonnelSearch = {
             }
         }, 500);
     },
-
+    
     _cleanupSync() {
         const frame = document.getElementById('gm-sync-iframe-worker');
         if (frame) frame.remove();
     },
-
+    
     _showToast(msg, duration = 0) {
         let toast = document.getElementById('gm-search-toast');
         if (!toast) {
@@ -5183,12 +5325,12 @@ const PersonnelSearch = {
             }, duration);
         }
     },
-
+    
     _removeToast() {
         const toast = document.getElementById('gm-search-toast');
         if(toast) toast.remove();
     },
-
+    
     injectStyles() {
         if (document.getElementById('gm-person-search-style')) return;
         const style = document.createElement('style');
@@ -5200,22 +5342,22 @@ const PersonnelSearch = {
             .gm-modal-title { font-size: 19px; font-weight: 600; color: #2c3e50; display: flex; align-items: center; gap: 10px; letter-spacing: 0.5px;}
             .gm-modal-close { border: none; background: transparent; font-size: 26px; color: #909399; cursor: pointer; padding: 0; line-height: 1; transition: color 0.2s; font-family: Arial, sans-serif;}
             .gm-modal-close:hover { color: #f56c6c; }
-
+    
             .gm-ps-body { display: flex; flex-direction: row; height: 100%; overflow: hidden; padding: 0 !important; background: #fff;}
             .gm-ps-left { width: 340px; display: flex; flex-direction: column; border-right: 1px solid #ebeef5; background: #fafafa; flex-shrink: 0;}
             .gm-ps-right { flex: 1; display: flex; align-items: center; justify-content: center; background: #f5f7fa; position: relative; overflow: hidden;}
-
+    
             .gm-ps-search-box { padding: 16px; background: #fff; border-bottom: 1px solid #ebeef5; box-shadow: 0 2px 10px rgba(0,0,0,0.02); z-index: 2;}
             .gm-ps-search-bar { display: flex; gap: 10px; }
             .gm-ps-input { flex: 1; padding: 10px 14px; border: 1px solid #dcdfe6; border-radius: 6px; outline: none; font-size: 14px; transition: all 0.2s; color: #303133; width: 100%; box-sizing: border-box;}
             .gm-ps-input:focus { border-color: #409EFF; box-shadow: 0 0 0 2px rgba(64,158,255,0.1);}
             .gm-ps-btn { padding: 0 18px; background: #409EFF; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s; white-space: nowrap;}
             .gm-ps-btn:hover { background: #66b1ff; }
-
+    
             .gm-ps-list-container { flex: 1; overflow-y: auto; padding: 0; position: relative; }
             .gm-ps-list-container::-webkit-scrollbar { width: 6px; }
             .gm-ps-list-container::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 3px; }
-
+    
             .gm-ps-list-item { padding: 15px 20px; cursor: pointer; border-bottom: 1px solid #ebeef5; transition: all 0.2s; background: #fff; display: flex; flex-direction: column; gap: 8px; position: relative;}
             .gm-ps-list-item:hover { background: #f0f7ff; }
             .gm-ps-list-item.active { background: #ecf5ff; }
@@ -5223,34 +5365,34 @@ const PersonnelSearch = {
             .gm-ps-item-name { font-size: 16px; font-weight: 600; color: #2c3e50; display: flex; justify-content: space-between; align-items: center; letter-spacing: 0.5px;}
             .gm-ps-item-id { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 13.5px; color: #8c939d; letter-spacing: 0.8px;}
             .gm-ps-loader { padding: 24px; text-align: center; color: #909399; font-size: 14px; }
-
+    
             .gm-ps-card { background: #fff; width: 380px; border-radius: 12px; box-shadow: 0 16px 36px rgba(0,0,0,0.08); overflow: hidden; display: none; flex-direction: column; border: 1px solid #ebeef5;}
             .gm-ps-card.show { display: flex; animation: gmFadeInUp 0.35s cubic-bezier(0.18, 0.89, 0.32, 1.28); }
             .gm-ps-card-header { background: linear-gradient(135deg, #409EFF, #73bfff); height: 100px; position: relative; transition: background 0.5s ease;}
             .gm-ps-avatar { width: 80px; height: 80px; border-radius: 50%; background: #fff; border: 4px solid #fff; position: absolute; bottom: -40px; left: 28px; box-shadow: 0 6px 16px rgba(0,0,0,0.12); display: flex; align-items: center; justify-content: center; font-size: 34px; color: #409EFF; font-weight: bold; font-family: "PingFang SC", "Microsoft YaHei", sans-serif; transition: color 0.5s ease;}
             .gm-ps-card-body { padding: 56px 28px 32px 28px; }
-
+    
             .gm-ps-info-row { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px dashed #ebeef5; }
             .gm-ps-info-row:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
-
+    
             /* 新增：两列网格布局，用于展示性别和籍贯等简短信息 */
             .gm-ps-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; padding-bottom: 18px; border-bottom: 1px dashed #ebeef5; }
             .gm-ps-info-col { display: flex; flex-direction: column; gap: 8px; }
-
+    
             .gm-ps-info-label { font-size: 13px; color: #909399; font-weight: 500;}
             .gm-ps-info-value { font-size: 15px; color: #303133; font-weight: 500; letter-spacing: 0.5px;}
-
+    
             @keyframes gmFadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
             @keyframes gmFadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         `;
         document.head.appendChild(style);
     },
-
+    
     createUI() {
         const overlay = document.createElement('div');
         overlay.id = 'gm-person-search-overlay';
         overlay.className = 'gm-modal-overlay';
-
+    
         overlay.innerHTML = `
             <div class="gm-modal-content">
                 <div class="gm-modal-header">
@@ -5265,7 +5407,7 @@ const PersonnelSearch = {
                     <button class="gm-modal-close" id="gm-ps-close">&times;</button>
                 </div>
                 <div class="gm-modal-body gm-ps-body">
-
+    
                     <div class="gm-ps-left">
                         <div class="gm-ps-search-box">
                             <div class="gm-ps-search-bar">
@@ -5278,7 +5420,7 @@ const PersonnelSearch = {
                             <div id="gm-ps-loader" class="gm-ps-loader">请输入关键词开始搜索</div>
                         </div>
                     </div>
-
+    
                     <div class="gm-ps-right">
                         <div id="gm-ps-empty-tip" style="color:#a8abb2; font-size:14px; display:flex; flex-direction:column; align-items:center; gap:16px;">
                             <svg viewBox="0 0 24 24" width="56" height="56" stroke="#dcdfe6" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -5288,7 +5430,7 @@ const PersonnelSearch = {
                             </svg>
                             <span>点击左侧列表查看名片详情</span>
                         </div>
-
+    
                         <div id="gm-ps-detail-card" class="gm-ps-card">
                             <div class="gm-ps-card-header" id="gm-ps-card-header-bg">
                                 <div class="gm-ps-avatar" id="gm-ps-card-avatar">A</div>
@@ -5296,7 +5438,7 @@ const PersonnelSearch = {
                             <div class="gm-ps-card-body">
                                 <div id="gm-ps-card-name" style="font-size: 24px; font-weight: 600; color: #2c3e50; margin-bottom: 8px; letter-spacing: 1px;">-</div>
                                 <div id="gm-ps-card-id" style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #8c939d; font-size: 15px; margin-bottom: 28px; letter-spacing: 0.8px;">-</div>
-
+    
                                 <!-- 提取的籍贯和性别（双列网格） -->
                                 <div class="gm-ps-info-grid" id="gm-ps-extra-info">
                                     <div class="gm-ps-info-col">
@@ -5308,7 +5450,7 @@ const PersonnelSearch = {
                                         <span class="gm-ps-info-value" id="gm-ps-card-prov">-</span>
                                     </div>
                                 </div>
-
+    
                                 <div class="gm-ps-info-row">
                                     <span class="gm-ps-info-label">所在院系/部门</span>
                                     <span class="gm-ps-info-value" id="gm-ps-card-dept">-</span>
@@ -5320,16 +5462,16 @@ const PersonnelSearch = {
                             </div>
                         </div>
                     </div>
-
+    
                 </div>
             </div>
         `;
         document.body.appendChild(overlay);
-
+    
         const closeFn = () => overlay.remove();
         document.getElementById('gm-ps-close').onclick = closeFn;
         overlay.onclick = (e) => { if(e.target === overlay) closeFn(); };
-
+    
         const doSearch = () => {
             const val = document.getElementById('gm-ps-input').value.trim();
             if(val) {
@@ -5340,27 +5482,27 @@ const PersonnelSearch = {
         };
         document.getElementById('gm-ps-btn').onclick = doSearch;
         document.getElementById('gm-ps-input').onkeypress = (e) => { if(e.key === 'Enter') doSearch(); };
-
+    
         const scrollArea = document.getElementById('gm-ps-scroll-area');
         scrollArea.onscroll = () => {
             if (scrollArea.scrollTop + scrollArea.clientHeight >= scrollArea.scrollHeight - 30) {
                 if (!this.state.loading && this.state.hasMore) this.fetchData();
             }
         };
-
+    
         document.getElementById('gm-ps-list').addEventListener('click', (e) => {
             const itemDiv = e.target.closest('.gm-ps-list-item');
             if (!itemDiv) return;
-
+    
             document.querySelectorAll('.gm-ps-list-item').forEach(el => el.classList.remove('active'));
             itemDiv.classList.add('active');
-
+    
             const idx = itemDiv.getAttribute('data-idx');
             const data = this.state.items[idx];
             if (data) this.showCardDetail(data);
         });
     },
-
+    
     resetState() {
         this.state = { page: 1, loading: false, hasMore: true, keyword: this.state.keyword, items: [] };
         const listDiv = document.getElementById('gm-ps-list');
@@ -5373,15 +5515,15 @@ const PersonnelSearch = {
         document.getElementById('gm-ps-empty-tip').style.display = 'flex';
         document.getElementById('gm-ps-detail-card').classList.remove('show');
     },
-
+    
     fetchData() {
         const token = GM_getValue(this.STORAGE_KEY);
         if(!token || !this.state.keyword) return;
-
+    
         this.state.loading = true;
         const loader = document.getElementById('gm-ps-loader');
         if(loader) loader.innerText = "正在加载数据...";
-
+    
         GM_xmlhttpRequest({
             method: "GET",
             url: `${this.API_BASE}?current=${this.state.page}&size=20&keyword=${encodeURIComponent(this.state.keyword)}`,
@@ -5393,7 +5535,7 @@ const PersonnelSearch = {
                     if (resp.success && resp.data.records) {
                         this.renderRows(resp.data.records);
                         const total = resp.data.total;
-
+    
                         if (resp.data.records.length < 20 || this.state.page * 20 >= total) {
                             this.state.hasMore = false;
                             if(loader) loader.innerText = `— 已到底部 (共 ${total} 人) —`;
@@ -5401,7 +5543,7 @@ const PersonnelSearch = {
                             this.state.page++;
                             if(loader) loader.innerText = "向下滚动加载更多...";
                         }
-
+    
                         if (total === 0 && this.state.page === 1) {
                             if(loader) loader.innerText = "没有找到匹配的人员";
                         }
@@ -5420,24 +5562,24 @@ const PersonnelSearch = {
             }
         });
     },
-
+    
     renderRows(newRecords) {
         const listDiv = document.getElementById('gm-ps-list');
         if(!listDiv) return;
-
+    
         const startIdx = this.state.items.length;
         this.state.items = this.state.items.concat(newRecords);
-
+    
         let html = '';
         newRecords.forEach((item, i) => {
             const actualIdx = startIdx + i;
             const name = item.xm || '未知姓名';
             const id = item.gh || '未知学号/工号';
             const dept = item.yxmc || '未知单位';
-
+    
             const identity = this._inferIdentity(id);
             const tagHtml = identity.short ? `<span style="font-size:12px; font-weight:normal; color:#909399; background:#f0f2f5; padding:3px 8px; border-radius:4px; letter-spacing:0.5px;">${identity.short}</span>` : '';
-
+    
             html += `
                 <div class="gm-ps-list-item" data-idx="${actualIdx}">
                     <div class="gm-ps-item-name">
@@ -5451,46 +5593,46 @@ const PersonnelSearch = {
                 </div>
             `;
         });
-
+    
         listDiv.insertAdjacentHTML('beforeend', html);
     },
-
+    
     showCardDetail(data) {
         const name = data.xm || '未知';
         const id = data.gh || '未知';
         const dept = data.yxmc || '未知所属机构';
         const sfzjh = data.sfzjh || ''; // 获取身份证号
-
+    
         const identity = this._inferIdentity(id);
         const parsedIDCard = this._parseIDCard(sfzjh);
-
+    
         const firstChar = name.substring(0, 1).toUpperCase();
-
+    
         let hash = 0;
         for (let i = 0; i < name.length; i++) {
             hash = name.charCodeAt(i) + ((hash << 5) - hash);
         }
         const colorTheme = this.THEME_COLORS[Math.abs(hash) % this.THEME_COLORS.length];
-
+    
         const avatarEl = document.getElementById('gm-ps-card-avatar');
         avatarEl.innerText = firstChar;
         avatarEl.style.color = colorTheme.text;
-
+    
         const headerEl = document.getElementById('gm-ps-card-header-bg');
         headerEl.style.background = colorTheme.bg;
-
+    
         document.getElementById('gm-ps-card-name').innerText = name;
         document.getElementById('gm-ps-card-id').innerText = `ID: ${id}`;
         document.getElementById('gm-ps-card-dept').innerText = dept;
-
+    
         // 动态隐藏/显示“身份证提取信息”行及性别动态排版
         const extraInfoEl = document.getElementById('gm-ps-extra-info');
         if (parsedIDCard) {
             const genderEl = document.getElementById('gm-ps-card-gender');
             const provEl = document.getElementById('gm-ps-card-prov');
-
+    
             provEl.innerText = parsedIDCard.province;
-
+    
             // 核心逻辑：判断性别是否已知
             if (parsedIDCard.gender && parsedIDCard.gender !== '未知') {
                 // 性别已知：显示双列网格
@@ -5502,12 +5644,12 @@ const PersonnelSearch = {
                 genderEl.parentElement.style.display = 'none';
                 extraInfoEl.style.gridTemplateColumns = '1fr';
             }
-
+    
             extraInfoEl.style.display = 'grid'; // 恢复显示整体区块
         } else {
             extraInfoEl.style.display = 'none'; // 解析失败或无数据时整体隐藏
         }
-
+    
         // 动态隐藏/显示“身份特征”行
         const typeRowEl = document.getElementById('gm-ps-card-type-row');
         if (identity.long) {
@@ -5516,16 +5658,16 @@ const PersonnelSearch = {
         } else {
             typeRowEl.style.display = 'none';
         }
-
+    
         document.getElementById('gm-ps-empty-tip').style.display = 'none';
-
+    
         const card = document.getElementById('gm-ps-detail-card');
         card.classList.remove('show');
         void card.offsetWidth;
         card.classList.add('show');
     }
 };
-
+    
 // =-=-=-=-=-=-=-=-=-=-=-=-= 2.13 我的课表教材信息显示 =-=-=-=-=-=-=-=-=-=-=-=-=
 const TextbookInfoModule = {
     // 网课平台地址配置
@@ -5538,23 +5680,23 @@ const TextbookInfoModule = {
         '知到': 'https://www.zhihuishu.com/',
         '学习通': 'https://cx.chaoxing.com/'
     },
-
+    
     _cachedData: null,
-
+    
     // 【阶段1】立即执行：挂载网络拦截器 (解决首次加载抓不到包的问题)
     installHook() {
         if (unsafeWindow.XMLHttpRequest.prototype._gm_textbook_hooked) return;
         unsafeWindow.XMLHttpRequest.prototype._gm_textbook_hooked = true;
-
+    
         const _send = unsafeWindow.XMLHttpRequest.prototype.send;
         const _open = unsafeWindow.XMLHttpRequest.prototype.open;
         const that = this;
-
+    
         unsafeWindow.XMLHttpRequest.prototype.open = function(method, url) {
             this._gm_textbook_url = url;
             return _open.apply(this, arguments);
         };
-
+    
         unsafeWindow.XMLHttpRequest.prototype.send = function(data) {
             this.addEventListener('load', function() {
                 if (this._gm_textbook_url && this._gm_textbook_url.includes('/print-data/')) {
@@ -5577,14 +5719,14 @@ const TextbookInfoModule = {
         };
         Logger.log('2.13', 'XHR拦截器已立即挂载');
     },
-
+    
     // 【阶段2】延迟执行：初始化界面
     initUI() {
         if (!window.location.href.includes('/student/for-std/course-table')) return;
         Logger.log('2.13', 'UI模块初始化');
-
+    
         this.injectStyles();
-
+    
         // 检查是否有缓存的数据待处理
         if (this._cachedData) {
             Logger.log('2.13', '发现缓存数据，开始渲染...');
@@ -5592,11 +5734,11 @@ const TextbookInfoModule = {
             this._cachedData = null; // 清空缓存
         }
     },
-
+    
     // 递归提取课程信息
     processData(jsonData) {
         const courseMap = new Map();
-
+    
         const findCourses = (obj) => {
             if (Array.isArray(obj)) {
                 obj.forEach(item => findCourses(item));
@@ -5609,9 +5751,9 @@ const TextbookInfoModule = {
                 }
             }
         };
-
+    
         findCourses(jsonData);
-
+    
         if (courseMap.size > 0) {
             Logger.log('2.13', `提取到 ${courseMap.size} 门课程，准备获取教材信息`);
             this.fetchTextbooks(courseMap);
@@ -5622,24 +5764,24 @@ const TextbookInfoModule = {
             }
         }
     },
-
+    
     // 并发获取教材详情页面并解析
     async fetchTextbooks(courseMap) {
         this.renderContainer('正在努力获取本学期课程的教材与网课信息，请稍候...');
-
+    
         const allTextbooks = [];
         const promises = [];
-
+    
         for (const [courseId, courseName] of courseMap.entries()) {
             const p = fetch(`https://jwxt.nwpu.edu.cn/student/for-std/lesson-search/info/${courseId}`)
                 .then(res => res.text())
                 .then(html => {
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(html, "text/html");
-
+    
                     let isOnlineCourse = false;
                     let platformName = '';
-
+    
                     const baseItems = doc.querySelectorAll('.base-info-item');
                     baseItems.forEach(item => {
                         const labelEl = item.querySelector('.base-info-label');
@@ -5651,7 +5793,7 @@ const TextbookInfoModule = {
                             if (label === '平台链接') platformName = value;
                         }
                     });
-
+    
                     if (isOnlineCourse) {
                         allTextbooks.push({
                             courseId: courseId, courseName: courseName, isOnline: true,
@@ -5660,14 +5802,14 @@ const TextbookInfoModule = {
                         });
                         return;
                     }
-
+    
                     const rows = doc.querySelectorAll('.textbook-table tbody tr');
                     rows.forEach(row => {
                         const tds = row.querySelectorAll('td');
                         if (tds.length === 0) return;
                         const offset = tds.length >= 8 ? 2 : 1;
                         if (tds.length < 6) return;
-
+    
                         allTextbooks.push({
                             courseId: courseId, courseName: courseName, isOnline: false,
                             name: tds[offset] ? tds[offset].innerText.trim() : '-',
@@ -5684,11 +5826,11 @@ const TextbookInfoModule = {
                 });
             promises.push(p);
         }
-
+    
         await Promise.allSettled(promises);
         this.renderTable(allTextbooks);
     },
-
+    
     // 注入UI样式
     injectStyles() {
         if (document.getElementById('gm-textbook-style')) return;
@@ -5728,7 +5870,7 @@ const TextbookInfoModule = {
         `;
         document.head.appendChild(style);
     },
-
+    
     // 渲染基础容器
     renderContainer(msg) {
         let container = document.getElementById('gm-textbook-container');
@@ -5744,14 +5886,14 @@ const TextbookInfoModule = {
             <div class="gm-textbook-empty">${msg}</div>
         `;
     },
-
+    
     // 渲染最终表格
     renderTable(dataList) {
         if (dataList.length === 0) {
             this.renderContainer('本学期的所有课程目前均未在教务系统中登记教材信息。');
             return;
         }
-
+    
         const uniqueKeys = new Set();
         const finalData = [];
         dataList.forEach(item => {
@@ -5761,39 +5903,39 @@ const TextbookInfoModule = {
                 finalData.push(item);
             }
         });
-
+    
         finalData.sort((a, b) => a.courseName.localeCompare(b.courseName));
-
+    
         const courseCountMap = {};
         finalData.forEach(item => {
             courseCountMap[item.courseName] = (courseCountMap[item.courseName] || 0) + 1;
         });
-
+    
         let rowsHtml = '';
         let currentCourse = '';
-
+    
         finalData.forEach(tb => {
             rowsHtml += `<tr>`;
-
+    
             if (tb.courseName !== currentCourse) {
                 currentCourse = tb.courseName;
                 const courseUrl = `https://jwxt.nwpu.edu.cn/student/for-std/lesson-search/info/${tb.courseId}`;
                 rowsHtml += `<td rowspan="${courseCountMap[currentCourse]}" class="gm-textbook-course">
                                 <a href="${courseUrl}" target="_blank" title="查看课程详情">${tb.courseName}</a>
-                             </td>`;
+                                </td>`;
             }
-
+    
             if (tb.isOnline) {
                 let targetUrl = '';
                 for (const [key, url] of Object.entries(this.PLATFORM_MAP)) {
                     if (tb.platformName.includes(key)) { targetUrl = url; break; }
                 }
-
+    
                 const platformDisplay = tb.platformName || "在线平台";
                 const linkHtml = targetUrl
                     ? `<a href="${targetUrl}" target="_blank" class="gm-online-btn">跳转至 ${platformDisplay}</a>`
                     : `<span style="margin-left:10px; color:#999; font-size:12px;">(暂无跳转链接)</span>`;
-
+    
                 rowsHtml += `
                     <td colspan="6" class="gm-online-cell">
                         <span style="margin-right:8px;">☁在线开放课程</span>
@@ -5812,7 +5954,7 @@ const TextbookInfoModule = {
                 </tr>`;
             }
         });
-
+    
         const container = document.getElementById('gm-textbook-container');
         if (container) {
             container.innerHTML = `
@@ -5837,26 +5979,26 @@ const TextbookInfoModule = {
         }
     }
 };
-
+    
 try {
     TextbookInfoModule.installHook();
 } catch(e) { console.error(e); }
-
+    
 // --- 3. 脚本主入口 (路由分发) ---
-
+    
 function runMainFeatures() {
     const href = window.location.href;
-
+    
     // 0. 【最高优先级】后台 Worker
     if (window.name === BackgroundSyncSystem.WORKER_NAME) {
         BackgroundSyncSystem.startWorker();
         return;
     }
-
+    
     if (window.frameElement && window.frameElement.id === 'gm-id-fetcher-patch') {
         return;
     }
-
+    
     // 门户(ecampus) 挂载与同步
     if (location.host === 'ecampus.nwpu.edu.cn') {
         PersonnelSearch.syncToken();
@@ -5865,65 +6007,79 @@ function runMainFeatures() {
         }
         return;
     }
-
+    
     // 1. 评教页面检测
     if (href.includes('evaluation-student-frontend')) {
         window.addEventListener('load', initEvaluationHelper);
         window.addEventListener('hashchange', () => {
-             if(window.location.hash.includes('byTask')) initEvaluationHelper();
+                if(window.location.hash.includes('byTask')) initEvaluationHelper();
         });
         setTimeout(initEvaluationHelper, 2000); // 兜底
     }
-
+    
     // 2. 开课查询页面
     else if (href.includes('/student/for-std/lesson-search')) {
         if(document.body) initLessonSearchPage();
     }
-
+    
     // 3. 学生画像页面
     else if (href.includes('/student/for-std/student-portrait')) {
         if (ConfigManager.enablePortraitEnhancement) {
             enhancePortraitPage(); // 功能3
         }
     }
-
+    
     // 4. 培养方案页面
     else if (href.includes('/student/for-std/program/info/') ||
-             href.includes('/student/for-std/program-completion-preview/info/') ||
-             href.includes('/student/for-std/majorPrograms/info/')) {
+                href.includes('/student/for-std/program-completion-preview/info/') ||
+                href.includes('/student/for-std/majorPrograms/info/')) {
         initProgramPageEnhancement(); // 功能8
     }
-
+    
     // 5. 我的课表页面
     else if (href.includes('/student/for-std/course-table')) {
         TextbookInfoModule.initUI(); // 仅执行 UI 初始化
     }
-
+    
     // 6. 教师主页跨标签页自动触发搜索
     else if (href.includes('teacher.nwpu.edu.cn/search')) {
         const searchName = GM_getValue('gm_cross_search_name');
         if (searchName) {
-            GM_setValue('gm_cross_search_name', '');
-
             const autoSearch = () => {
                 const input = document.getElementById('sea');
                 const btn = document.querySelector('.dyym2_btn');
                 if (input && btn) {
                     input.value = searchName;
+    
+                    // 派发事件，防止网页使用Vue等框架导致直接赋值无效
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+    
                     btn.click();
+    
+                    // 只有真正成功点击搜索后，才清空缓存
+                    GM_setValue('gm_cross_search_name', '');
                 }
             };
+    
             let retryCount = 0;
             const timer = setInterval(() => {
-                if (document.getElementById('sea') || retryCount > 50) {
+                // 确保输入框和搜索按钮都渲染出来再执行
+                if (document.getElementById('sea') && document.querySelector('.dyym2_btn')) {
                     clearInterval(timer);
-                    autoSearch();
+                    // 稍微延迟 300ms 执行，避免填入的值被网页原生初始化的 JS 覆盖清空
+                    setTimeout(autoSearch, 300);
+                }
+                // 延长超时时间至 15 秒(150次)，适配首次无缓存加载较慢的情况
+                else if (retryCount > 150) {
+                    clearInterval(timer);
+                    GM_setValue('gm_cross_search_name', ''); // 超时兜底清空
                 }
                 retryCount++;
             }, 100);
         }
     }
-
+    
     // 7. 顶层主页
     else if (window.top === window.self) {
         initializeHomePageFeatures();
@@ -5933,13 +6089,13 @@ function runMainFeatures() {
         }, 5000);
     }
 }
-
+    
 if (document.readyState === 'loading') {
         window.addEventListener('DOMContentLoaded', runMainFeatures);
     }
 else {
         runMainFeatures();
     }
-
+    
 })();
 
