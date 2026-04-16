@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         翱翔教务功能加强(非官方)
 // @namespace    http://tampermonkey.net/
-// @version      1.7.6
+// @version      1.7.7
 // @description  1.提供GPA分析报告；2. 导出课程成绩与教学班排名；3.更好的“学生画像”显示；4.选课助手；5.课程关注与后台同步；6.一键自动评教；7.人员信息检索
 // @author       leamloli
 // @match        https://jwxt.nwpu.edu.cn/*
@@ -491,6 +491,15 @@ function trySubmitQueuedTeacherSearch(searchName) {
     if (!input || !button) return false;
 
     input.value = searchName;
+    if (typeof input.dispatchEvent === 'function') {
+        const eventCtor =
+            (typeof window !== 'undefined' && typeof window.Event === 'function' && window.Event) ||
+            (typeof globalThis !== 'undefined' && typeof globalThis.Event === 'function' && globalThis.Event);
+        const createEvent = (type) =>
+            eventCtor ? new eventCtor(type, { bubbles: true }) : { type, bubbles: true };
+        input.dispatchEvent(createEvent('input'));
+        input.dispatchEvent(createEvent('change'));
+    }
     button.click();
     GM_setValue(config.storageKey, '');
     return true;
@@ -3661,8 +3670,12 @@ const LessonSearchEnhancer = {
         PAGE_SIZE_1000: '.page-config .dropdown-menu a[value="1000"]',
         NEXT_BTN: '.semi-auto-table-paginator .fa-angle-right',
         LOADER: 'td.dataTables_empty',
-        TABLE_ROWS: '#table tbody tr'
+        TABLE_ROWS: '#table tbody tr',
+        SEMESTER_POLL_INTERVAL_MS: 500,
+        SEMESTER_POLL_MAX_ATTEMPTS: 40,
+        SEMESTER_LOAD_FAILED_TEXT: '加载失败，请刷新页面重试'
     },
+    _semesterPollTimer: null,
 
     init() {
         // 1. 路径检查
@@ -3680,30 +3693,76 @@ const LessonSearchEnhancer = {
         // 3. 初始化UI
         this.injectControlPanel();
         this.renderHistoryTags();
+        this.startSemesterPopulatePolling();
 
-        // 4. 自动同步触发逻辑
-        // 必须在页面完全就绪后才消耗掉 sessionStorage 的标记
-        if (sessionStorage.getItem('nwpu_course_sync_trigger') === 'true') {
-
-            // 检查：如果表格还在转圈加载中(dataTables_empty)，则继续等待，暂不执行
-            if (document.querySelector('td.dataTables_empty')) {
-                setTimeout(() => this.init(), 500);
-                return;
-            }
-
-            console.log("[NWPU-Enhanced] 页面就绪，准备执行自动同步...");
-            sessionStorage.removeItem('nwpu_course_sync_trigger'); // 消耗标记
-
-            // 延迟 1秒 确保视觉上页面稳定，然后启动
-            setTimeout(() => {
-                this.startSyncProcess(true);
-            }, 1000);
-        }
-
-        // 5. 启动观察者
+        // 4. 启动观察者
         const observer = new MutationObserver(() => this.renderHistoryTags());
         const target = document.querySelector('#table') || document.body;
         observer.observe(target, { childList: true, subtree: true });
+    },
+
+    startSemesterPopulatePolling() {
+        if (this._semesterPollTimer) {
+            clearInterval(this._semesterPollTimer);
+            this._semesterPollTimer = null;
+        }
+
+        let attempts = 0;
+        const stopPolling = () => {
+            if (!this._semesterPollTimer) return;
+            clearInterval(this._semesterPollTimer);
+            this._semesterPollTimer = null;
+        };
+
+        this._semesterPollTimer = setInterval(() => {
+            const select = document.getElementById('gm-sync-semester');
+            if (!select) {
+                stopPolling();
+                return;
+            }
+
+            attempts += 1;
+            if (this.populateSemesterSelect()) {
+                stopPolling();
+                if (sessionStorage.getItem('nwpu_course_sync_trigger') === 'true') {
+                    sessionStorage.removeItem('nwpu_course_sync_trigger');
+                    setTimeout(() => {
+                        this.startSyncProcess(true);
+                    }, 500);
+                }
+                return;
+            }
+
+            if (attempts >= this.CONFIG.SEMESTER_POLL_MAX_ATTEMPTS) {
+                stopPolling();
+                this.showSemesterLoadFailure(select);
+            }
+        }, this.CONFIG.SEMESTER_POLL_INTERVAL_MS);
+    },
+
+    showSemesterLoadFailure(select) {
+        if (!select) return;
+
+        if (typeof select.innerHTML === 'string') {
+            select.innerHTML = '';
+        }
+        if (typeof select.removeChild === 'function') {
+            while (select.firstChild) {
+                select.removeChild(select.firstChild);
+            }
+        }
+        if (Array.isArray(select.childNodes)) {
+            select.childNodes.length = 0;
+        }
+
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = this.CONFIG.SEMESTER_LOAD_FAILED_TEXT;
+        option.innerText = this.CONFIG.SEMESTER_LOAD_FAILED_TEXT;
+        option.disabled = true;
+        option.selected = true;
+        select.appendChild(option);
+        select.value = '';
     },
 
     // --- 1. UI: 注入右侧控制面板 ---
@@ -3718,7 +3777,10 @@ const LessonSearchEnhancer = {
                 <span id="gm-panel-close" style="position:absolute; right:10px; color:#999; cursor:pointer; font-size:18px; line-height:1; font-weight:bold;" title="关闭面板 (刷新页面可恢复)">×</span>
             </div>
             <div style="padding:15px;">
-                <button id="gm-btn-sync-start" style="width:100%; padding:8px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold; transition: background 0.2s;">存储当前学期课程信息</button>
+                <select id="gm-sync-semester" style="width:100%; padding:6px; margin-bottom:10px; border-radius:4px; border:1px solid #ccc; font-size:14px; outline:none; cursor:pointer;">
+                    <option value="">加载学期列表中...</option>
+                </select>
+                <button id="gm-btn-sync-start" style="width:100%; padding:8px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold; transition: background 0.2s;">存储选定学期课程信息</button>
                 <button id="gm-btn-clear-hist" style="width:100%; padding:8px; background:#dc3545; color:white; border:none; border-radius:4px; cursor:pointer; margin-top:10px; transition: background 0.2s;">清除所有记录</button>
                 <div style="margin-top:12px; font-size:12px; color:#666; line-height:1.5;">
                     建议在每轮选课开始前执行一次。
@@ -3752,6 +3814,8 @@ const LessonSearchEnhancer = {
         btnClear.onmouseover = () => btnClear.style.background = '#c82333';
         btnClear.onmouseout = () => btnClear.style.background = '#dc3545';
 
+        this.populateSemesterSelect();
+
         // 拖拽
         const header = document.getElementById('gm-panel-header');
         let isDragging = false, startX, startY, initialLeft, initialTop;
@@ -3770,11 +3834,263 @@ const LessonSearchEnhancer = {
         document.onmouseup = () => isDragging = false;
     },
 
+    getSemesterOptions() {
+        const isInvalidText = (value) => value == null || String(value).trim() === '' || String(value).trim() === 'undefined';
+        const normalizeOption = (value, text) => {
+            if (isInvalidText(value) || isInvalidText(text)) return null;
+            const normalizedValue = String(value).trim();
+            const normalizedText = String(text).trim();
+            if (!normalizedValue || !normalizedText || normalizedValue === 'undefined' || normalizedText === 'undefined') return null;
+            return { value: normalizedValue, text: normalizedText };
+        };
+
+        const pickOptionText = (option) => {
+            const text = option ? option.text : undefined;
+            if (!isInvalidText(text)) return text;
+            const nameZh = option ? option.nameZh : undefined;
+            if (!isInvalidText(nameZh)) return nameZh;
+            return text;
+        };
+
+        const collectOptions = (source) => {
+            if (!source) return [];
+            const rawOptions = Array.isArray(source) ? source : Object.values(source);
+            return rawOptions.map((option) => {
+                if (!option) return null;
+                return normalizeOption(option.value, pickOptionText(option));
+            }).filter(Boolean);
+        };
+
+        let options = [];
+        const semesterSelect = document.getElementById('semester');
+        if (semesterSelect && semesterSelect.selectize && semesterSelect.selectize.options) {
+            options = collectOptions(semesterSelect.selectize.options);
+        } else if (typeof unsafeWindow !== 'undefined' && unsafeWindow.$) {
+            const semesterSource = unsafeWindow.$('#semester') && unsafeWindow.$('#semester')[0];
+            if (semesterSource && semesterSource.selectize && semesterSource.selectize.options) {
+                options = collectOptions(semesterSource.selectize.options);
+            }
+        }
+
+        if (!options.length) {
+            options = Array.from(document.querySelectorAll('.selectize-dropdown.semester .option'))
+                .map((option) => normalizeOption(
+                    option.getAttribute ? option.getAttribute('data-value') : null,
+                    option.innerText !== undefined ? option.innerText : option.textContent
+                ))
+                .filter(Boolean);
+        }
+
+        const numericValue = (value) => {
+            const digits = String(value).replace(/\D/g, '');
+            return digits ? Number(digits) : Number.NaN;
+        };
+
+        const seen = new Set();
+        return options
+            .sort((left, right) => {
+                const leftNum = numericValue(left.value);
+                const rightNum = numericValue(right.value);
+                if (Number.isNaN(leftNum) && Number.isNaN(rightNum)) {
+                    return right.value.localeCompare(left.value);
+                }
+                if (Number.isNaN(leftNum)) return 1;
+                if (Number.isNaN(rightNum)) return -1;
+                return rightNum - leftNum;
+            })
+            .filter((option) => {
+                if (seen.has(option.value)) return false;
+                seen.add(option.value);
+                return true;
+            });
+    },
+
+    getSelectOptions(select) {
+        if (!select) return [];
+        if (select.options && typeof select.options.length === 'number') {
+            return Array.from(select.options);
+        }
+        if (select.childNodes && typeof select.childNodes.length === 'number') {
+            return Array.from(select.childNodes);
+        }
+        return [];
+    },
+
+    getCurrentSelectOption(select) {
+        const options = this.getSelectOptions(select);
+        if (!options.length) return null;
+
+        if (typeof select.selectedIndex === 'number' && select.selectedIndex >= 0 && options[select.selectedIndex]) {
+            return options[select.selectedIndex];
+        }
+
+        const selectedByValue = String(select.value || '').trim();
+        if (selectedByValue) {
+            const matchedByValue = options.find((option) => String(option.value || '').trim() === selectedByValue);
+            if (matchedByValue) return matchedByValue;
+        }
+
+        const selectedByFlag = options.find((option) => !!option.selected);
+        if (selectedByFlag) return selectedByFlag;
+
+        return null;
+    },
+
+    getOptionDisplayText(option) {
+        if (!option) return '';
+        return String(
+            option.text ||
+            option.innerText ||
+            option.textContent ||
+            option.value ||
+            ''
+        ).trim();
+    },
+
+    escapeHtml(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    },
+
+    async selectSemesterByValue(value) {
+        const targetValue = String(value || '').trim();
+        if (!targetValue) {
+            throw new Error('未提供目标学期值');
+        }
+
+        const input = document.querySelector('.selectize-control.semester .selectize-input') ||
+                      document.querySelector('.selectize-input');
+        if (!input || typeof input.click !== 'function') {
+            throw new Error('未找到学期下拉输入框');
+        }
+        input.click();
+
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        let matchedOption = null;
+        for (let attempt = 0; attempt < 10 && !matchedOption; attempt += 1) {
+            let options = Array.from(document.querySelectorAll('.selectize-dropdown.semester .option') || []);
+            if (!options.length) {
+                options = Array.from(document.querySelectorAll('.option') || []);
+            }
+            matchedOption = options.find((option) => {
+                const dataValue = option.getAttribute ? option.getAttribute('data-value') : null;
+                return String(dataValue || option.dataset?.value || option.value || '').trim() === targetValue;
+            }) || null;
+            if (!matchedOption) {
+                await sleep(100);
+            }
+        }
+
+        if (!matchedOption || typeof matchedOption.click !== 'function') {
+            throw new Error(`未找到目标学期选项: ${targetValue}`);
+        }
+
+        matchedOption.click();
+        await sleep(300);
+        return matchedOption;
+    },
+
+    isCurrentSemesterEmpty() {
+        const emptyNode = document.querySelector(this.CONFIG.LOADER);
+        const emptyText = emptyNode ? String(emptyNode.innerText || emptyNode.textContent || '').trim() : '';
+        return !!emptyText && emptyText.includes('无数据');
+    },
+
+    async findLatestSemesterWithData() {
+        const options = this.getSemesterOptions();
+        for (const option of options) {
+            this.updateOverlayStatus(`正在检测: ${option.text}...`);
+            await this.selectSemesterByValue(option.value);
+            if (this.isCurrentSemesterEmpty()) {
+                Logger.log('2.5', `学期 ${option.text} 为空，跳过`);
+                continue;
+            }
+            return option;
+        }
+        return null;
+    },
+
+    populateSemesterSelect() {
+        const select = document.getElementById('gm-sync-semester');
+        if (!select) return false;
+
+        const options = this.getSemesterOptions();
+        if (!options.length) return false;
+
+        if (typeof select.innerHTML === 'string') {
+            select.innerHTML = '';
+        }
+        if (typeof select.removeChild === 'function') {
+            while (select.firstChild) {
+                select.removeChild(select.firstChild);
+            }
+        }
+        if (Array.isArray(select.childNodes)) {
+            select.childNodes.length = 0;
+        }
+
+        options.forEach((optionData) => {
+            const option = document.createElement('option');
+            option.value = optionData.value;
+            option.textContent = optionData.text;
+            option.innerText = optionData.text;
+            select.appendChild(option);
+        });
+
+        this.syncSemesterSelect();
+        return true;
+    },
+
+    syncSemesterSelect() {
+        const select = document.getElementById('gm-sync-semester');
+        if (!select) return;
+
+        const optionCount = Array.isArray(select.childNodes) ? select.childNodes.length : (select.options ? select.options.length : 0);
+        if (optionCount <= 1) return;
+
+        const activeElement = document.activeElement;
+        if (activeElement && (activeElement === select || (typeof select.contains === 'function' && select.contains(activeElement)))) {
+            return;
+        }
+
+        const semesterItem = document.querySelector('.selectize-control.semester .item');
+        const semesterText = semesterItem ? String(semesterItem.innerText || semesterItem.textContent || '').trim() : '';
+        if (!semesterText) return;
+
+        const options = Array.from(select.childNodes || select.options || []);
+        const matchedOption = options.find((option) => {
+            const text = String(option.innerText || option.textContent || '').trim();
+            return text === semesterText || String(option.value || '').trim() === semesterText;
+        });
+        if (!matchedOption) return;
+
+        select.value = matchedOption.value;
+        options.forEach((option) => {
+            option.selected = option === matchedOption;
+        });
+    },
+
     // --- 2. Core: 同步逻辑 ---
     async startSyncProcess(isAuto) {
-        if (!isAuto && !confirm('即将自动操作并开始执行抓取。\n过程可能需要几十秒，请勿关闭页面。')) return;
+        let targetSemesterValue = '当前学期';
+        let targetSemesterDisplayText = '当前学期';
+        if (!isAuto) {
+            const select = document.getElementById('gm-sync-semester');
+            const selectedOption = this.getCurrentSelectOption(select);
+            if (!select || !selectedOption || !String(selectedOption.value || '').trim()) {
+                alert('学期列表仍在加载中或加载失败，请稍等后再试。');
+                return;
+            }
+            targetSemesterValue = String(selectedOption.value).trim();
+            targetSemesterDisplayText = this.getOptionDisplayText(selectedOption);
+            if (!confirm(`即将自动操作并开始抓取【${targetSemesterDisplayText}】的数据...\n过程可能需要几十秒，请勿关闭页面。`)) return;
+        }
 
-        const overlay = this.showOverlay();
+        const overlay = this.showOverlay(targetSemesterDisplayText);
         const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
         const waitForLoad = async () => {
@@ -3786,6 +4102,22 @@ const LessonSearchEnhancer = {
         };
 
         try {
+            if (!isAuto) {
+                this.updateOverlayStatus(`正在切换到目标学期: ${targetSemesterDisplayText}`);
+                await this.selectSemesterByValue(targetSemesterValue);
+                await waitForLoad();
+            } else {
+                const autoSemester = await this.findLatestSemesterWithData();
+                if (!autoSemester) {
+                    alert('未找到包含排课数据的学期，自动同步已取消。');
+                    overlay.remove();
+                    return;
+                }
+                targetSemesterDisplayText = this.getOptionDisplayText(autoSemester);
+                this.updateOverlaySemester(targetSemesterDisplayText);
+                await waitForLoad();
+            }
+
             const sizeBtn = document.querySelector(this.CONFIG.PAGE_SIZE_BTN);
             if(sizeBtn) {
                 if(!sizeBtn.innerText.includes('1000')) {
@@ -3935,13 +4267,15 @@ const LessonSearchEnhancer = {
         });
     },
 
-    showOverlay() {
+    showOverlay(semesterName = '当前学期') {
         const div = document.createElement('div');
+        const safeSemesterName = this.escapeHtml(semesterName);
         div.id = 'gm-sync-overlay';
         div.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:100000; color:white; display:flex; flex-direction:column; align-items:center; justify-content:center;';
         div.innerHTML = `
             <div style="font-size:24px; font-weight:bold; margin-bottom:15px;">正在同步课程数据...</div>
             <div id="gm-overlay-status" style="font-size:16px; margin-bottom:10px; color:#ddd;">正在初始化...</div>
+            <div id="gm-overlay-target-sem" style="font-size:16px; margin-bottom:10px; color:#ddd;">锁定抓取学期: ${safeSemesterName}</div>
             <div style="font-size:18px;">已抓取: <span id="gm-sync-count" style="color:#4facfe; font-weight:bold;">0</span> 条</div>
             <div style="margin-top:30px; color:#aaa; font-size:14px;">请勿关闭页面，程序正在自动操作</div>
         `;
@@ -3957,6 +4291,11 @@ const LessonSearchEnhancer = {
     updateOverlayStatus(text) {
         const el = document.getElementById('gm-overlay-status');
         if(el) el.innerText = text;
+    },
+
+    updateOverlaySemester(text) {
+        const el = document.getElementById('gm-overlay-target-sem');
+        if(el) el.innerText = `锁定抓取学期: ${text}`;
     }
 };
 
@@ -4688,7 +5027,14 @@ const BackgroundSyncSystem = {
             let limit = 0;
             while(!document.querySelector('td.dataTables_empty') && limit < 5) { await sleep(100); limit++; }
             limit = 0;
-            while(document.querySelector('td.dataTables_empty') && limit < 200) { await sleep(100); limit++; }
+            while(
+                document.querySelector('td.dataTables_empty') &&
+                !document.querySelector('td.dataTables_empty').innerText.includes('无数据') &&
+                limit < 200
+            ) {
+                await sleep(100);
+                limit++;
+            }
             await sleep(500);
         };
 
@@ -4699,6 +5045,8 @@ const BackgroundSyncSystem = {
 
             rows.forEach(row => {
                 try {
+                    if (row.querySelector('td.dataTables_empty')) return;
+
                     const idInput = row.querySelector('input[name="model_id"]');
                     if (!idInput) return;
                     const id = idInput.value;
@@ -4754,24 +5102,37 @@ const BackgroundSyncSystem = {
 
                 // ================== 1. 切换到最新学期 ==================
                 let activeSemesterName = "未知学期";
+                let foundValidSemester = false;
                 const semesterInput = document.querySelector('.selectize-control.semester .selectize-input');
                 if (semesterInput) {
                     semesterInput.click();
                     await sleep(500);
-                    const firstOption = document.querySelector('.selectize-dropdown-content .option:first-child');
-                    if (firstOption) {
-                        const targetSemester = firstOption.innerText.trim();
-                        const currentSemester = semesterInput.innerText.trim();
+                    const currentSemester = semesterInput.innerText.trim();
+                    const semesterOptions = Array.from(document.querySelectorAll('.selectize-dropdown-content .option'));
+                    for (const option of semesterOptions) {
+                        const targetSemester = option.innerText.trim();
+                        if (!targetSemester || targetSemester.includes('无数据')) continue;
+
                         if (targetSemester !== currentSemester && !currentSemester.startsWith(targetSemester)) {
-                            firstOption.click();
+                            option.click();
                             await sleep(500);
                             await waitForLoading();
-                            activeSemesterName = targetSemester;
-                        } else {
-                            activeSemesterName = currentSemester.split('\n')[0];
-                            document.body.click();
+                            if (document.querySelector('td.dataTables_empty') && document.querySelector('td.dataTables_empty').innerText.includes('无数据')) {
+                                Logger.log("2.8", `学期 ${targetSemester} 无数据，跳过`);
+                                semesterInput.click();
+                                await sleep(500);
+                                continue;
+                            }
                         }
+
+                        activeSemesterName = targetSemester === currentSemester ? currentSemester.split('\n')[0] : targetSemester;
+                        foundValidSemester = true;
+                        document.body.click();
+                        break;
                     }
+                }
+                if (!foundValidSemester) {
+                    throw new Error("遍历了所有学期均未找到排课数据");
                 }
                 Logger.log("2.8", `锁定抓取学期: ${activeSemesterName}`);
 
@@ -7384,6 +7745,7 @@ function exposeTestExports() {
         BackgroundSyncSystem,
         PersonnelSearch,
         TextbookInfoModule,
+        LessonSearchEnhancer,
         buildGreasyForkFallbackUrls,
         requestTextWithFallback,
         downloadUserscriptWithFallback,

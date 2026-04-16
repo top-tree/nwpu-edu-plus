@@ -250,8 +250,17 @@ describe('runMainFeatures 路由分发', () => {
         expect(env.window.GM_setValue).not.toHaveBeenCalledWith('gm_cross_search_name', '');
 
         const input = createElement('input', { id: 'sea' });
+        const observedEvents = [];
+        input.addEventListener('input', () => observedEvents.push(['input', input.value]));
+        input.addEventListener('change', () => observedEvents.push(['change', input.value]));
+        input.dispatchEvent = jest.fn((event) => {
+            (input._listeners[event.type] || []).forEach((handler) => handler(event));
+            return true;
+        });
         const button = createElement('button', { className: 'dyym2_btn' });
-        const clickSpy = jest.fn();
+        const clickSpy = jest.fn(() => {
+            expect(env.gmStorage['gm_cross_search_name']).toBe('张三');
+        });
         button.addEventListener('click', clickSpy);
         env.document.body.appendChild(input);
         env.document.body.appendChild(button);
@@ -259,6 +268,10 @@ describe('runMainFeatures 路由分发', () => {
         intervalFn();
 
         expect(input.value).toBe('张三');
+        expect(observedEvents).toEqual([
+            ['input', '张三'],
+            ['change', '张三'],
+        ]);
         expect(clickSpy).toHaveBeenCalledTimes(1);
         expect(env.gmStorage['gm_cross_search_name']).toBe('');
         expect(env.intervals.has(intervalId)).toBe(false);

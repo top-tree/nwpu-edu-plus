@@ -149,10 +149,31 @@ afterEach(() => {
 });
 
 describe('main.user.js runtime exports', () => {
+    test('脚本元信息保持非官方名称并升级到 official 1.7.7', () => {
+        const source = require('fs').readFileSync(SCRIPT_PATH, 'utf-8');
+        const headerStart = source.indexOf('// ==UserScript==');
+        const headerEnd = source.indexOf('// ==/UserScript==');
+
+        expect(headerStart).toBeGreaterThanOrEqual(0);
+        expect(headerEnd).toBeGreaterThan(headerStart);
+
+        const headerLines = source
+            .slice(headerStart, headerEnd)
+            .split(/\r?\n/)
+            .map((line) => line.trimEnd());
+        const nameLines = headerLines.filter((line) => line.startsWith('// @name '));
+        const versionLines = headerLines.filter((line) => line.startsWith('// @version '));
+
+        expect(nameLines).toEqual(['// @name         翱翔教务功能加强(非官方)']);
+        expect(versionLines).toEqual(['// @version      1.7.7']);
+    });
+
     test('测试模式会暴露核心 runtime API', () => {
         const { api } = loadRuntime();
 
         expect(api.applyTestOverrides).toEqual(expect.any(Function));
+        expect(api.LessonSearchEnhancer).toBeDefined();
+        expect(api.LessonSearchEnhancer.injectControlPanel).toEqual(expect.any(Function));
         expect(api.initializeCourseTablePage).toEqual(expect.any(Function));
         expect(api.initializeTeacherSearchAutoSubmit).toEqual(expect.any(Function));
         expect(api.runMainFeatures).toEqual(expect.any(Function));
@@ -185,8 +206,17 @@ describe('main.user.js runtime exports', () => {
 
     test('trySubmitQueuedTeacherSearch 在表单就绪后填写并提交', () => {
         const input = createElement('input', { id: 'sea' });
+        const observedEvents = [];
+        input.addEventListener('input', () => observedEvents.push(['input', input.value]));
+        input.addEventListener('change', () => observedEvents.push(['change', input.value]));
+        input.dispatchEvent = jest.fn((event) => {
+            (input._listeners[event.type] || []).forEach((handler) => handler(event));
+            return true;
+        });
         const button = createElement('button', { className: 'dyym2_btn' });
-        const clickSpy = jest.fn();
+        const clickSpy = jest.fn(() => {
+            expect(env.gmStorage[api.CONSTANTS.TEACHER_SEARCH_NAME_KEY]).toBe('李老师');
+        });
         button.addEventListener('click', clickSpy);
 
         const { api, env } = loadRuntime({
@@ -195,10 +225,16 @@ describe('main.user.js runtime exports', () => {
                 elements: [input, button],
             },
         });
+        env.gmStorage[api.CONSTANTS.TEACHER_SEARCH_NAME_KEY] = '李老师';
 
         expect(api.trySubmitQueuedTeacherSearch('李老师')).toBe(true);
         expect(input.value).toBe('李老师');
         expect(clickSpy).toHaveBeenCalledTimes(1);
+        expect(observedEvents).toEqual([
+            ['input', '李老师'],
+            ['change', '李老师'],
+        ]);
+        expect(input.dispatchEvent).toHaveBeenCalledTimes(2);
         expect(env.gmStorage[api.CONSTANTS.TEACHER_SEARCH_NAME_KEY]).toBe('');
     });
 
@@ -634,5 +670,328 @@ describe('main.user.js runtime exports', () => {
         expect(env.document.getElementById('gm-estimate-result').style.display).toBe('block');
         expect(env.document.getElementById('gm-result-a').innerHTML).toContain('预测总 GPA');
         expect(env.document.getElementById('gm-result-b').innerHTML).toContain('预估 2 门');
+    });
+
+    test('LessonSearchEnhancer 控制面板包含学期选择器和选定学期同步按钮', () => {
+        const { api, env } = loadRuntime();
+        const enhancer = api.LessonSearchEnhancer;
+        const originalGetElementById = env.document.getElementById.bind(env.document);
+        const fakeElements = {
+            'gm-btn-sync-start': createElement('button', { id: 'gm-btn-sync-start' }),
+            'gm-btn-clear-hist': createElement('button', { id: 'gm-btn-clear-hist' }),
+            'gm-panel-close': createElement('span', { id: 'gm-panel-close' }),
+            'gm-panel-header': createElement('div', { id: 'gm-panel-header' }),
+        };
+        jest.spyOn(env.document, 'getElementById').mockImplementation((id) => fakeElements[id] || originalGetElementById(id));
+
+        enhancer.injectControlPanel();
+
+        const panel = originalGetElementById('gm-lesson-helper-panel');
+        expect(panel.innerHTML).toContain('id="gm-sync-semester"');
+        expect(panel.innerHTML).toContain('加载学期列表中');
+        expect(panel.innerHTML).toContain('存储选定学期课程信息');
+    });
+
+    test('LessonSearchEnhancer selectize 数据填充学期主路径会去重排序并同步当前学期', () => {
+        const semesterSource = createElement('select', {
+            id: 'semester',
+        });
+        semesterSource.selectize = {
+            options: {
+                a: { value: '2023-2024-1', text: '2023-2024-1' },
+                b: { value: '2024-2025-2', text: '2024-2025-2' },
+                c: { value: '2024-2025-2', text: '重复学期' },
+                d: { value: '', text: '空值' },
+                e: { value: '2022-2023-2', nameZh: '2022-2023-2（中文）' },
+                f: { value: '2021-2022-2', text: 'undefined' },
+            },
+        };
+
+        const semesterItem = createElement('div', {
+            className: 'item',
+            textContent: '2023-2024-1',
+        });
+        semesterItem.innerText = '2023-2024-1';
+
+        const semesterControl = createElement('div', { className: 'selectize-control semester' }, [semesterItem]);
+        const { api, env } = loadRuntime({
+            envOptions: {
+                elements: [semesterSource, semesterControl],
+            },
+        });
+
+        const enhancer = api.LessonSearchEnhancer;
+        const originalGetElementById = env.document.getElementById.bind(env.document);
+        const gmSyncSemester = createElement('select', { id: 'gm-sync-semester' });
+        const fakeElements = {
+            'gm-sync-semester': gmSyncSemester,
+            'gm-btn-sync-start': createElement('button', { id: 'gm-btn-sync-start' }),
+            'gm-btn-clear-hist': createElement('button', { id: 'gm-btn-clear-hist' }),
+            'gm-panel-close': createElement('span', { id: 'gm-panel-close' }),
+            'gm-panel-header': createElement('div', { id: 'gm-panel-header' }),
+        };
+        jest.spyOn(env.document, 'getElementById').mockImplementation((id) => fakeElements[id] || originalGetElementById(id));
+
+        enhancer.injectControlPanel();
+
+        expect(gmSyncSemester.childNodes.map((option) => option.value)).toEqual(['2024-2025-2', '2023-2024-1', '2022-2023-2']);
+        expect(gmSyncSemester.childNodes.map((option) => option.textContent)).toContain('2022-2023-2（中文）');
+        expect(gmSyncSemester.value).toBe('2023-2024-1');
+    });
+
+    test('LessonSearchEnhancer populateSemesterSelect 在无元素或无学期时返回 false', () => {
+        const { api, env } = loadRuntime();
+        const enhancer = api.LessonSearchEnhancer;
+        const originalGetElementById = env.document.getElementById.bind(env.document);
+        const getElementByIdSpy = jest.spyOn(env.document, 'getElementById');
+
+        getElementByIdSpy.mockImplementation((id) => {
+            if (id === 'gm-sync-semester') return null;
+            return originalGetElementById(id);
+        });
+
+        expect(enhancer.populateSemesterSelect()).toBe(false);
+
+        const semesterSource = createElement('select', { id: 'semester' });
+        semesterSource.selectize = { options: {} };
+        const gmSyncSemester = createElement('select', { id: 'gm-sync-semester' });
+        getElementByIdSpy.mockImplementation((id) => {
+            if (id === 'gm-sync-semester') return gmSyncSemester;
+            if (id === 'semester') return semesterSource;
+            return originalGetElementById(id);
+        });
+
+        expect(enhancer.populateSemesterSelect()).toBe(false);
+    });
+
+    test('LessonSearchEnhancer 初始化会轮询填充学期', () => {
+        const pageConfig = createElement('div', { className: 'page-config' });
+        const table = createElement('table', { id: 'table' });
+        const gmSyncSemester = createElement('select', { id: 'gm-sync-semester' });
+        const sessionStorage = {
+            getItem: jest.fn((key) => (key === 'nwpu_course_sync_trigger' ? 'true' : null)),
+            removeItem: jest.fn(),
+            setItem: jest.fn(),
+        };
+        const { api, env, timeouts } = loadRuntime({
+            envOptions: {
+                elements: [pageConfig, table, gmSyncSemester],
+            },
+            globalOverrides: { sessionStorage },
+            manualTimeouts: true,
+        });
+
+        env.window.location.href = 'https://jwxt.nwpu.edu.cn/student/for-std/lesson-search';
+
+        const enhancer = api.LessonSearchEnhancer;
+        jest.spyOn(enhancer, 'injectControlPanel').mockImplementation(() => {});
+        jest.spyOn(enhancer, 'renderHistoryTags').mockImplementation(() => {});
+        const populateSemesterSelectSpy = jest.spyOn(enhancer, 'populateSemesterSelect').mockReturnValue(true);
+        const startSyncProcessSpy = jest.spyOn(enhancer, 'startSyncProcess').mockImplementation(() => {});
+
+        enhancer.init();
+
+        expect(env.intervals.size).toBe(1);
+
+        const intervalId = [...env.intervals.keys()][0];
+        env.intervals.get(intervalId)();
+
+        expect(populateSemesterSelectSpy).toHaveBeenCalledTimes(1);
+        expect(env.intervals.has(intervalId)).toBe(false);
+        expect(timeouts.size).toBe(1);
+
+        const timeoutId = [...timeouts.keys()][0];
+        timeouts.get(timeoutId).fn();
+
+        expect(sessionStorage.removeItem).toHaveBeenCalledWith('nwpu_course_sync_trigger');
+        expect(startSyncProcessSpy).toHaveBeenCalledWith(true);
+    });
+
+    test('LessonSearchEnhancer syncSemesterSelect 在聚焦或选项不足时不覆盖用户选择', () => {
+        const semesterSource = createElement('select', { id: 'semester' });
+        semesterSource.selectize = {
+            options: {
+                a: { value: '2024-2025-2', text: '2024-2025-2' },
+                b: { value: '2023-2024-1', text: '2023-2024-1' },
+            },
+        };
+        const semesterItem = createElement('div', { className: 'item', textContent: '2023-2024-1' });
+        semesterItem.innerText = '2023-2024-1';
+        const semesterControl = createElement('div', { className: 'selectize-control semester' }, [semesterItem]);
+        const gmSyncSemester = createElement('select', { id: 'gm-sync-semester', value: '2024-2025-2' });
+        const gmOptionA = createElement('option', { value: '2024-2025-2', textContent: '2024-2025-2' });
+        const gmOptionB = createElement('option', { value: '2023-2024-1', textContent: '2023-2024-1' });
+        gmSyncSemester.appendChild(gmOptionA);
+        gmSyncSemester.appendChild(gmOptionB);
+
+        const { api, env } = loadRuntime({
+            envOptions: {
+                elements: [semesterSource, semesterControl, gmSyncSemester],
+            },
+        });
+        const enhancer = api.LessonSearchEnhancer;
+        const originalGetElementById = env.document.getElementById.bind(env.document);
+        jest.spyOn(env.document, 'getElementById').mockImplementation((id) => {
+            if (id === 'gm-sync-semester') return gmSyncSemester;
+            if (id === 'semester') return semesterSource;
+            return originalGetElementById(id);
+        });
+
+        env.document.activeElement = gmSyncSemester;
+        enhancer.syncSemesterSelect();
+        expect(gmSyncSemester.value).toBe('2024-2025-2');
+
+        env.document.activeElement = null;
+        gmSyncSemester.childNodes.length = 0;
+        gmSyncSemester.appendChild(createElement('option', { value: '2024-2025-2', textContent: '2024-2025-2' }));
+        enhancer.syncSemesterSelect();
+        expect(gmSyncSemester.value).toBe('2024-2025-2');
+    });
+
+    test('LessonSearchEnhancer 手动同步会切换到目标学期并显示锁定抓取学期', async () => {
+        const semesterSource = createElement('select', { id: 'semester' });
+        semesterSource.selectize = {
+            options: {
+                a: { value: '2024-2025-2', text: '2024-2025-2' },
+                b: { value: '2023-2024-1', text: '2023-2024-1' },
+            },
+        };
+
+        const semesterItem = createElement('div', { className: 'item', textContent: '2024-2025-2' });
+        semesterItem.innerText = '2024-2025-2';
+        const semesterInput = createElement('div', { className: 'selectize-input' });
+        const semesterControl = createElement('div', { className: 'selectize-control semester' }, [semesterInput, semesterItem]);
+        const semesterOption = createElement('div', {
+            className: 'option',
+            'data-value': '202402',
+            textContent: '2024-2025-2',
+        });
+        const semesterDropdown = createElement('div', { className: 'selectize-dropdown semester' }, [semesterOption]);
+        const gmSyncSemester = createElement('select', { id: 'gm-sync-semester' });
+        gmSyncSemester.appendChild(createElement('option', { value: '2023-2024-1', textContent: '2023-2024-1' }));
+        gmSyncSemester.appendChild(createElement('option', { value: '202402', textContent: '2024-2025-2' }));
+        gmSyncSemester.value = '202402';
+
+        const confirm = jest.fn(() => true);
+        const alert = jest.fn();
+        const { api, env } = loadRuntime({
+            envOptions: {
+                elements: [semesterSource, semesterControl, semesterDropdown, gmSyncSemester],
+            },
+            globalOverrides: {
+                confirm,
+                alert,
+            },
+            manualTimeouts: false,
+        });
+        const reload = jest.fn();
+        env.window.location.reload = reload;
+        global.location.reload = reload;
+
+        const enhancer = api.LessonSearchEnhancer;
+        const originalGetElementById = env.document.getElementById.bind(env.document);
+        const updateOverlayStatusSpy = jest.spyOn(enhancer, 'updateOverlayStatus');
+        const selectSemesterOptionClick = jest.fn();
+        semesterOption.click = selectSemesterOptionClick;
+        const inputClick = jest.fn();
+        semesterInput.click = inputClick;
+        jest.spyOn(env.document, 'getElementById').mockImplementation((id) => {
+            if (id === 'gm-sync-semester') return gmSyncSemester;
+            if (id === 'semester') return semesterSource;
+            return originalGetElementById(id);
+        });
+
+        jest.spyOn(env.document, 'querySelector').mockImplementation((selector) => {
+            if (selector === '.selectize-control.semester .selectize-input') return semesterInput;
+            if (selector === '.selectize-input') return semesterInput;
+            if (selector === '.selectize-control.semester .item') return semesterItem;
+            if (selector === '.selectize-dropdown.semester .option') return semesterOption;
+            if (selector === '.option') return semesterOption;
+            return env.body.querySelector(selector);
+        });
+        jest.spyOn(env.document, 'querySelectorAll').mockImplementation((selector) => {
+            if (selector === '.selectize-dropdown.semester .option') return [semesterOption];
+            if (selector === '.option') return [semesterOption];
+            return env.body.querySelectorAll(selector);
+        });
+
+        await enhancer.startSyncProcess(false);
+
+        expect(confirm).toHaveBeenCalledWith(expect.stringContaining('【2024-2025-2】'));
+        expect(updateOverlayStatusSpy).toHaveBeenCalledWith(expect.stringContaining('正在切换到目标学期'));
+        expect(inputClick).toHaveBeenCalledTimes(1);
+        expect(selectSemesterOptionClick).toHaveBeenCalledTimes(1);
+        expect(semesterOption.getAttribute('data-value')).toBe('202402');
+        expect(env.document.querySelector('#gm-sync-overlay').innerHTML).toContain('锁定抓取学期: 2024-2025-2');
+        expect(alert).toHaveBeenCalledWith(expect.stringContaining('同步完成'));
+        expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    test('LessonSearchEnhancer showOverlay 会转义学期文本', () => {
+        const { api } = loadRuntime();
+        const overlay = api.LessonSearchEnhancer.showOverlay('2024 <x> & 2');
+
+        expect(overlay.innerHTML).toContain('锁定抓取学期: 2024 &lt;x&gt; &amp; 2');
+    });
+
+    test('LessonSearchEnhancer 自动同步会选择第一个非空学期', async () => {
+        const first = { value: '202402', text: '2024-2025-2' };
+        const second = { value: '202301', text: '2023-2024-1' };
+        const { api } = loadRuntime();
+        const enhancer = api.LessonSearchEnhancer;
+
+        jest.spyOn(enhancer, 'getSemesterOptions').mockReturnValue([first, second]);
+        jest.spyOn(enhancer, 'selectSemesterByValue').mockResolvedValue(undefined);
+        jest.spyOn(enhancer, 'isCurrentSemesterEmpty')
+            .mockReturnValueOnce(true)
+            .mockReturnValueOnce(false);
+
+        const result = await enhancer.findLatestSemesterWithData();
+
+        expect(result).toEqual(second);
+        expect(enhancer.selectSemesterByValue).toHaveBeenNthCalledWith(1, '202402');
+        expect(enhancer.selectSemesterByValue).toHaveBeenNthCalledWith(2, '202301');
+    });
+
+    test('BackgroundSyncSystem worker 跳过 DataTables 空行', async () => {
+        const emptyRow = createElement('tr', {}, [
+            createElement('td', { className: 'dataTables_empty', textContent: '无数据' }),
+        ]);
+        const validRow = createElement('tr', {}, [
+            createElement('td', {}, [createElement('input', { name: 'model_id', value: 'lesson-1' })]),
+            createElement('td', { className: 'lesson-code', textContent: 'U01M1001' }),
+            createElement('td', { className: 'course-name', textContent: '高等数学' }),
+            createElement('td', { textContent: '4' }),
+            createElement('td', { className: 'course-teacher', textContent: '张老师' }),
+            createElement('td', { className: 'course-datetime-place', textContent: '周一; 教室A' }),
+            createElement('td', {}, [createElement('span', { 'data-original-title': '实际/上限人数', textContent: '10/30' })]),
+        ]);
+        const tbody = createElement('tbody', {}, [emptyRow, validRow]);
+        const table = createElement('table', { id: 'table' }, [tbody]);
+        const pageSize = createElement('button', { className: 'dropdown-toggle', textContent: '1000' });
+        pageSize.innerText = '1000';
+        const currentSemester = createElement('div', { className: 'selectize-input', textContent: '2024-2025-2' });
+        currentSemester.innerText = '2024-2025-2';
+        const semesterControl = createElement('div', { className: 'selectize-control semester' }, [currentSemester]);
+        const semesterOption = createElement('div', { className: 'option', textContent: '2024-2025-2' });
+        semesterOption.innerText = '2024-2025-2';
+        const semesterDropdown = createElement('div', { className: 'selectize-dropdown-content' }, [semesterOption]);
+
+        const { api, env } = loadRuntime({
+            envOptions: {
+                url: 'https://jwxt.nwpu.edu.cn/student/home',
+                elements: [createElement('div', { className: 'page-config' }, [pageSize]), semesterControl, semesterDropdown, table],
+            },
+            manualTimeouts: false,
+        });
+        global.postMessage = jest.fn();
+        global.top.postMessage = global.postMessage;
+
+        api.BackgroundSyncSystem.startWorker();
+        await new Promise((resolve) => setImmediate(resolve));
+
+        const stored = JSON.parse(env.gmStorage[api.CONSTANTS.BACKGROUND_SYNC_KEY]);
+        expect(stored).toHaveLength(1);
+        expect(stored[0]).toMatchObject({ id: 'lesson-1', code: 'U01M1001', name: '高等数学' });
     });
 });

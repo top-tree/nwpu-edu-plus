@@ -252,6 +252,7 @@ function createElementEx(tag, attrs = {}, children = []) {
         id: attrs.id || '',
         className: attrs.className || '',
         textContent: attrs.textContent || '',
+        innerText: attrs.innerText || attrs.textContent || '',
         innerHTML: '',
         src: attrs.src || '',
         href: attrs.href || '',
@@ -262,8 +263,10 @@ function createElementEx(tag, attrs = {}, children = []) {
         offsetHeight: 0,
         offsetWidth: 0,
         childNodes,
+        children: childNodes,
         parentNode: null,
         _removed: false,
+        disabled: !!attrs.disabled,
         value: attrs.value || '',
 
         getAttribute(name) {
@@ -431,6 +434,7 @@ function createMockEnv(options = {}) {
         toString() {
             return this.href;
         },
+        reload: jest.fn(),
     };
 
     const documentObj = {
